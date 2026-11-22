@@ -72,11 +72,12 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   the infrared as a 4th channel (RGBI, like SilverFast's archive files). `Positive/` holds the
   finished picture, inverted if it is a negative, with dust removed if ticked. Both come from
   one pass, so a frame takes about half as long as it did with two passes.
-- **File names** are built in this order: prefix, scan date, roll number, picture number, e.g.
-  `20261122_R001_005.tif`, or `Scan_20261122_R001_005.tif` with a prefix. Every part is
-  optional (prefix field, "Scan date in name", "Roll number in name") and brings its own `_`,
-  so a part you leave out leaves no stray underscore. The date is the day of the scan, not the
-  "Photo taken" date. A batch that runs past midnight keeps the date it started with.
+- **File names** are built in this order: prefix, scan date, picture number, roll number, e.g.
+  `20261122_005_R001.tif`, or `Scan_20261122_005_R001.tif` with a prefix. Every part but the
+  picture number is optional (prefix field, "Scan date in name", "Roll number in name") and
+  brings its own `_`, so a part you leave out leaves no stray underscore. The date is the day
+  of the scan, not the "Photo taken" date. A batch that runs past midnight keeps the date it
+  started with.
 - **Next number**: shows the number the next scan gets. It counts on by itself from the pictures
   already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
   another number to carry on from there; it is used for the next batch, then the roll counts on
@@ -113,8 +114,11 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   tries it. For ntfy, which goes through a server on the internet, only the roll number is
   sent, not your film notes.
 - **Photo taken**: type a year (or year-month-day) and the files get that as their EXIF
-  "date taken", so Apple Photos, Lightroom and Google Photos sort them by it. The real scan date
-  stays in the file's description.
+  "date taken" and as the file's own date, so Apple Photos, Lightroom and Google Photos sort
+  them by it. With only a year (`2005`), the files get the day and time of the scan in that
+  year, e.g. `2005-11-22 20:59:12`, so they keep the order and spacing they were scanned in.
+  With a full date, they get that day at noon, one second apart. The real scan date stays in
+  the file's description.
 
 - **Stop on errors**: off by default. If one frame fails (for example autofocus), the rest of the
   strip is still scanned and the Activity list says which frame failed. Tick it to stop at the
@@ -160,9 +164,9 @@ Added on 2026-11-22 in the evening, none of it run on the scanner yet:
   landed within about 0.1 to 0.4 pixel of each other, which is why it should work.
 - Messages: the iMessage and the banner run through macOS and could only be tested with a
   stand-in, so use "Send a test" first. ntfy was tested against a local stand-in server.
-- Roll number change, film description, the file name order (prefix, date, roll, number) and
-  the next number: pretend scanner and a browser, with real folders and files, including rolls
-  that hold names from the earlier versions.
+- Roll number change, film description, the file name order (prefix, date, number, roll), the
+  next number and the "Photo taken" year: pretend scanner and a browser, with real folders and
+  files, including rolls that hold names from the earlier versions.
 
 The error help, the film-moved check, the thumbnail when film goes in, carrying on after a
 failed frame, eject when done and the scan log are tested with the pretend scanner only, with failures made up to look like nkscan's.

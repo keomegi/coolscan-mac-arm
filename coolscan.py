@@ -1175,6 +1175,7 @@ class App:
         self.progress = None
         self.cancel = False
         self.batch_day = None  # the date in the file names of the batch being scanned
+        self.last_taken = None  # the "date taken" given to the last frame
         self.version = 0
         self.settings = {
             "film": "negative", "format": "", "preview_mode": "scan", "preview_dpi": 290,
@@ -1736,12 +1737,13 @@ class App:
         self.say("calibrated: every preview and scan now uses this focus and exposure")
 
     def _stem(self, folders, n):
-        """The name without ".tif": prefix, scan date, roll number, picture number, suffix,
-        e.g. Scan_20261122_R001_005. A part that is left out brings no underscore."""
+        """The name without ".tif": prefix, scan date, picture number (and suffix), roll number,
+        e.g. Scan_20261122_005_R001. A part that is left out brings no underscore."""
         st = self.settings
         digits = min(6, max(1, int(st["digits"] or 3)))
-        return (self._prefix() + "".join(part + "_" for part in self._name_parts())
-                + f"{n:0{digits}d}" + self._clean_name(st["suffix"]))
+        date, roll = self._name_parts()
+        return (self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}"
+                + self._clean_name(st["suffix"]) + ("_" + roll if roll else ""))
 
     @staticmethod
     def _clean_name(text):
@@ -1794,18 +1796,18 @@ class App:
         return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
 
     def _name_parts(self):
-        """What stands between the prefix and the picture number: the scan date, then the roll number."""
+        """The scan date that goes before the picture number and the roll number that goes after it
+        ("" for a part that is switched off)."""
         st = self.settings
-        parts = []
-        if st["name_date"]:
-            # the day of the scan; one batch keeps one date even if it runs past midnight
-            parts.append(self.batch_day or time.strftime("%Y%m%d"))
+        # the day of the scan; one batch keeps one date even if it runs past midnight
+        date = (self.batch_day or time.strftime("%Y%m%d")) if st["name_date"] else ""
         mode = st["roll_tag"]
+        roll = ""
         if mode == "overall":
-            parts.append(f"R{self._roll_number(st['roll'] or '') or 1:03d}")
+            roll = f"R{self._roll_number(st['roll'] or '') or 1:03d}"
         elif mode in ("day", "date_day"):
-            parts.append(f"R{int(st['roll_day_count'] or 1):02d}")
-        return parts
+            roll = f"R{int(st['roll_day_count'] or 1):02d}"
+        return date, roll
 
     def _next_number(self, folders, n):
         """n, or the first number after it whose name is still free in every one of the folders."""
@@ -1955,8 +1957,8 @@ class App:
         new_name = re.sub(r"^Roll \d+", f"Roll {number:03d}", old_name) if old_number else f"Roll {number:03d}"
         folder = base / old_name
         # work out every change first, and stop before touching anything if one of them could not be made
-        # R003 as a part of its own: before the picture number (20261122_R003_005.tif) or, in names
-        # from earlier versions, at the end (Scan005_R003.tif, Scan005_R003_IR.tif)
+        # R003 as a part of its own: at the end (20261122_005_R003.tif, ..._R003_IR.tif) or, in names
+        # from one earlier version, before the picture number (20261122_R003_005.tif)
         tag = re.compile(rf"(?:(?<=_)|^)R{old_number:03d}(?=_\d+[^/]*\.tiff?$|(?:_[A-Za-z]+)?\.tiff?$)", re.I)
         renames = []
         if folder.is_dir() and number != old_number:
@@ -2077,13 +2079,35 @@ class App:
         text = (self.settings["photo_date"] or "").strip()
         if text:
             try:
-                parts = [int(x) for x in re.split(r"[-./ ]", text) if x]
-                y, m, d = (parts + [1, 1])[:3]
-                # frames of one roll get one second apart, so galleries keep them in order
-                meta["taken"] = datetime.datetime(y, m, d, 12, 0, 0) + datetime.timedelta(seconds=n)
-            except (ValueError, IndexError):
+                taken = self._taken(text, n, datetime.datetime.now())
+                last = self.last_taken
+                if last is not None and datetime.timedelta(0) <= last - taken < datetime.timedelta(seconds=5):
+                    taken = last + datetime.timedelta(seconds=1)  # frames a moment apart still sort in scan order
+                meta["taken"] = self.last_taken = taken
+            except (ValueError, IndexError, OverflowError):
                 self.say(f"can't read the photo date {text!r}; use e.g. 2005 or 2005-06-14. Using today.")
         return meta
+
+    @staticmethod
+    def _taken(text, n, now):
+        """The "date taken" for frame number n from what was typed, scanned at the moment `now`.
+
+        Only a year: the day and time of the scan, in that year, so the files keep the real
+        order and spacing of the scanning. A full date: that day at noon, one second per
+        frame, so galleries keep the frames in order.
+        """
+        parts = [int(x) for x in re.split(r"[-./ ]", text) if x]
+        if len(parts) == 1:
+            now = now.replace(microsecond=0)
+            try:
+                return now.replace(year=parts[0])
+            except ValueError:
+                if (now.month, now.day) != (2, 29):
+                    raise
+                return now.replace(year=parts[0], day=28)  # 29 February, in a year that has none
+        y, m, d = (parts + [1, 1])[:3]
+        import datetime
+        return datetime.datetime(y, m, d, 12, 0, 0) + datetime.timedelta(seconds=n)
 
     def _positive(self, planes, nikon_icc):
         """The finished picture in the chosen colour space, and the profile to embed.
@@ -2549,9 +2573,9 @@ body.picking .frame img{cursor:crosshair}
 <label>Next number<input type="number" id="s-start" min="1"></label>
 <p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
 <label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
-<p class="hint">Galleries sort the scans by this date instead of today's. The real scan date stays in the file's description. Leave empty to use today.</p>
+<p class="hint">Galleries sort the scans by this date instead of today's. With only a year, the files get today's day and time in that year. The real scan date stays in the file's description. Leave empty to use today.</p>
 <p class="hint" id="nameex"></p>
-<p class="hint">Names are built as prefix, scan date, roll number, picture number. A part you leave out brings no "_" with it.</p>
+<p class="hint">Names are built as prefix, scan date, picture number, roll number. A part you leave out brings no "_" with it.</p>
 <label>Stop on errors<input type="checkbox" id="s-stop_on_errors"></label>
 <label>Eject film when done<input type="checkbox" id="s-eject_after"></label>
 <label>Write scan log<input type="checkbox" id="s-scan_log"></label>
