@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Scan outputs, samples and test material
+image_sample/
+test/
+test.zip
+scans/
+*.tif
+*.tiff
+*.TIF
+*.TIFF
+*.png
+*.jpg
+*.jpeg
+*.zip
+
+# Nikon's copyrighted software (never commit)
+app_scan.iso
+*.iso
+*.dll
+*.DLL
+*.exe
+*.EXE
+*.msi
+*.cab
