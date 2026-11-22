@@ -1,0 +1,326 @@
+"""File names, roll folders and film descriptions."""
+
+import os
+import re
+import time
+from pathlib import Path
+
+DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll's folder
+ASIDE_FOLDER = "Earlier rolls"          # where older roll folders go when their number is taken over
+_NAME_END = re.compile(r"(?:_IR|_negative)?\.tiff?$", re.I)   # how a saved picture's name ends
+_NAME_ROLL = re.compile(r"(?:_\d{8})?_R\d{2,3}$")              # the roll number before that, if any
+
+
+class RollsMixin:
+    def _stem(self, folders, n):
+        """The name without ".tif": prefix, scan date, picture number, roll number, e.g.
+        20261122_005_R001. The prefix and the date are optional and bring their own underscore."""
+        st = self.settings
+        digits = min(6, max(1, int(st["digits"] or 3)))
+        date, roll = self._name_parts()
+        return self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}" + "_" + roll
+
+    @staticmethod
+    def _clean_name(text):
+        return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "-", str(text or "").strip())
+
+    def _prefix(self):
+        """The optional prefix. When there is one it brings its own "_": Scan_001, and just 001 without."""
+        prefix = self._clean_name(self.settings["basename"])
+        return prefix + "_" if prefix and prefix[-1] not in "_- ." else prefix
+
+    def _name_folders(self):
+        roll = self.roll_dir()
+        return [roll, roll / "RAW", roll / "Positive"]
+
+    def _highest_number(self):
+        """The highest frame number among the pictures already in this roll, whatever their prefix."""
+        st = self.settings
+        prefix = self._clean_name(st["basename"])
+        keep = min(6, max(3, int(st["digits"] or 3)))
+        highest = 0
+        for folder in self._name_folders():
+            try:
+                names = [e.name for e in os.scandir(folder) if e.is_file() and not e.name.startswith(".")]
+            except OSError:
+                continue
+            for name in names:
+                end = _NAME_END.search(name)
+                if not end:
+                    continue
+                core = _NAME_ROLL.sub("", name[:end.start()])
+                rest = core[len(prefix):].lstrip("_- .") if prefix and core.startswith(prefix) else ""
+                if rest.isdigit():
+                    highest = max(highest, int(rest))
+                    continue
+                found = re.search(r"(\d+)$", core)
+                if found:
+                    text = found.group(1)
+                    highest = max(highest, int(text if len(text) <= 6 else text[-keep:]))
+        return highest
+
+    def next_number(self):
+        """The number the next scan gets: one past the highest in the roll, or the number typed in.
+        Either way it moves on past any name that is already taken, so nothing is overwritten."""
+        try:
+            typed = int(self.settings["start"] or 0)
+        except (TypeError, ValueError):
+            typed = 0
+        return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
+
+    def _name_parts(self):
+        """The scan date that goes before the picture number ("" when switched off) and the
+        number of the roll being scanned, which always goes after it."""
+        st = self.settings
+        # the day of the scan; one batch keeps one date even if it runs past midnight
+        date = (self.batch_day or time.strftime("%Y%m%d")) if st["name_date"] else ""
+        return date, f"R{self._roll_number(st['roll'] or '') or 1:03d}"
+
+    def _next_number(self, folders, n):
+        """n, or the first number after it whose name is still free in every one of the folders."""
+        taken = set()
+        for f in folders:
+            try:
+                for e in os.scandir(f):
+                    end = _NAME_END.search(e.name)
+                    if end:
+                        taken.add(e.name[:end.start()].lower())  # the Mac's disk does not tell A from a
+            except OSError:
+                pass
+        while self._stem(folders, n).lower() in taken:
+            n += 1
+        return n
+
+    def _film_text(self):
+        st = self.settings
+        iso = str(st["film_iso"]).strip()
+        parts = [st["film_brand"].strip(), st["film_stock"].strip(),
+                 (f"ISO {iso}" if iso and iso.isdigit() else iso)]
+        text = " ".join(p for p in parts if p)
+        if st["film_notes"].strip():
+            text = (text + ", " if text else "") + st["film_notes"].strip()
+        return text
+
+    def _base(self):
+        return Path(os.path.expanduser(self.settings["outdir"]))
+
+    @staticmethod
+    def _roll_number(name):
+        m = re.match(r"Roll (\d+)", name)
+        return int(m.group(1)) if m else 0
+
+    def roll_dir(self):
+        """The current roll's folder. Strips keep going into it until New roll."""
+        st = self.settings
+        if not st["roll"]:
+            base = self._base()
+            existing = sorted((d.name for d in base.glob("Roll *") if d.is_dir()),
+                              key=self._roll_number) if base.is_dir() else []
+            st["roll"] = existing[-1] if existing else "Roll 001"
+            self.save_settings()
+        return self._base() / st["roll"]
+
+    def new_roll(self, details):
+        """Start a new folder for the next roll. Called only after the person confirms."""
+        st = self.settings
+        self._remember_roll()
+        for k in ("film_brand", "film_stock", "film_iso", "film_notes"):
+            st[k] = str(details.get(k, "")).strip()
+        st["film_description"] = self._tidy_text(details.get("film_description", ""))
+        base = self._base()
+        used = [self._roll_number(d.name) for d in base.glob("Roll *")] if base.is_dir() else []
+        used.append(self._roll_number(st["roll"] or ""))
+        name = f"Roll {max(used + [0]) + 1:03d}"
+        film = self._film_text()
+        if film:
+            name += " - " + re.sub(r'[\\/:*?"<>|]', "-", film)[:80].strip()
+        st["roll"] = name
+        st["start"] = 0
+        self._remember_roll()
+        self.save_settings()
+        self.say(f"new roll: saving to {base / name}, numbering starts again")
+        self._write_description()
+        with self.lock:
+            self.version += 1
+
+    # -- going back to an earlier roll
+    _FILM_KEYS = ("film_brand", "film_stock", "film_iso", "film_notes")
+
+    def rolls(self):
+        """Every roll folder in the target folder, lowest number first. The current roll is always in it."""
+        names = set()
+        try:
+            names = {d.name for d in self._base().iterdir() if d.is_dir() and re.match(r"Roll \d+", d.name)}
+        except OSError:
+            pass
+        if self.settings["roll"]:
+            names.add(self.settings["roll"])
+        return sorted(names, key=lambda n: (self._roll_number(n), n))
+
+    def _remember_roll(self):
+        """Keep the current roll's film details, so that going back to it later brings them back."""
+        st = self.settings
+        if st["roll"]:
+            st["rolls"][st["roll"]] = {k: st[k] for k in self._FILM_KEYS}
+
+    def switch_roll(self, name):
+        """Carry on in a roll folder that is already there. Nothing is renamed or moved."""
+        st = self.settings
+        name = str(name or "")
+        if name == st["roll"]:
+            return {"ok": True, "same": True}
+        if not re.match(r"Roll \d+", name) or "/" in name or not (self._base() / name).is_dir():
+            return {"ok": False, "error": "That roll's folder is not there any more."}
+        self._remember_roll()
+        known = st["rolls"].get(name)
+        if not isinstance(known, dict):
+            # a roll from before the app kept these: what its folder name says about the film
+            known = {"film_notes": name.partition(" - ")[2].strip()}
+        for k in self._FILM_KEYS:
+            st[k] = str(known.get(k, "") or "")
+        st["roll"], st["start"], st["film_description"] = name, 0, ""
+        self.read_description()
+        self.save_settings()
+        self.say(f"back in {name}: the next picture gets number {self.next_number()}")
+        with self.lock:
+            self.version += 1
+        return {"ok": True}
+
+    # -- film description: free text, kept as a text file in the roll's folder
+    @staticmethod
+    def _tidy_text(text):
+        return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()[:20000]
+
+    def _write_description(self):
+        """Make Description.txt in the roll folder say what the app has. True if the file was written."""
+        st = self.settings
+        folder = self.roll_dir()
+        path = folder / DESCRIPTION_FILE
+        text = st["film_description"].strip()
+        try:
+            old = path.read_text(encoding="utf-8", errors="replace").strip() if path.is_file() else None
+            if old == text or (old is None and not text):
+                return False
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n" if text else "", encoding="utf-8")
+        except (OSError, ValueError) as e:
+            self.say(f"could not write {path} ({getattr(e, 'strerror', None) or e})")
+            return False
+        return True
+
+    def read_description(self):
+        """At start: if Description.txt was edited by hand, the file is what counts."""
+        st = self.settings
+        path = self.roll_dir() / DESCRIPTION_FILE
+        try:
+            if path.is_file():
+                st["film_description"] = self._tidy_text(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            pass
+
+    def describe(self, text):
+        """The description was edited in the app. Safe during a scan: it only writes the text file."""
+        st = self.settings
+        st["film_description"] = self._tidy_text(text)
+        self.save_settings()
+        if self._write_description():
+            self.say(f"film description saved in {st['roll']}/{DESCRIPTION_FILE}")
+        with self.lock:
+            self.version += 1
+
+    # -- changing the roll number
+    def _other_rolls(self, from_number):
+        """Other roll folders numbered from_number or higher, lowest first."""
+        base, mine = self._base(), self.settings["roll"]
+        if not base.is_dir():
+            return []
+        rolls = [d for d in base.glob("Roll *") if d.is_dir() and d.name != mine
+                 and self._roll_number(d.name) >= from_number]
+        return sorted(rolls, key=lambda d: (self._roll_number(d.name), d.name))
+
+    def renumber_roll(self, number, move_aside=False):
+        """Give the roll being scanned another number: its folder and the _R... part of its file names.
+
+        Nothing is deleted or overwritten. Other rolls with that number or a higher one would
+        get in the way of counting on from here, so they are listed and nothing is changed;
+        only when the person then says so (move_aside) are they moved, whole and untouched,
+        into "Earlier rolls". Returns what the page needs to show.
+        """
+        st = self.settings
+        base = self._base()
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            number = 0
+        if not 1 <= number <= 999:
+            return {"ok": False, "error": "Pick a roll number from 1 to 999."}
+        old_name = st["roll"] or self.roll_dir().name
+        old_number = self._roll_number(old_name)
+        others = self._other_rolls(number)
+        if number == old_number and not others:
+            return {"ok": True, "same": True}
+        if others and not move_aside:
+            return {"ok": False, "aside": ASIDE_FOLDER, "in_the_way": [
+                {"name": d.name, "files": sum(1 for p in d.rglob("*") if p.is_file())} for d in others]}
+        new_name = re.sub(r"^Roll \d+", f"Roll {number:03d}", old_name) if old_number else f"Roll {number:03d}"
+        folder = base / old_name
+        # work out every change first, and stop before touching anything if one of them could not be made
+        # R003 as a part of its own: at the end (20261122_005_R003.tif, ..._R003_IR.tif) or, in names
+        # from one earlier version, before the picture number (20261122_R003_005.tif)
+        tag = re.compile(rf"(?:(?<=_)|^)R{old_number:03d}(?=_\d+[^/]*\.tiff?$|(?:_[A-Za-z]+)?\.tiff?$)", re.I)
+        renames = []
+        if folder.is_dir() and number != old_number:
+            for p in sorted(folder.rglob("*")):
+                hits = list(tag.finditer(p.name)) if p.is_file() else []
+                if hits:
+                    last = hits[-1]
+                    renames.append((p, p.with_name(p.name[:last.start()] + f"R{number:03d}" + p.name[last.end():])))
+        targets = [t for _, t in renames]
+        if len(set(targets)) != len(targets) or any(t.exists() for t in targets):
+            return {"ok": False, "error": "Some files in this roll already have that roll number in their name. Nothing was changed."}
+        moves = []
+        aside = base / ASIDE_FOLDER
+        taken = set()
+        for d in others:
+            to, k = aside / d.name, 2
+            while to.exists() or to in taken:
+                to, k = aside / f"{d.name} ({k})", k + 1
+            taken.add(to)
+            moves.append((d, to))
+        done = []
+        try:
+            if moves:
+                aside.mkdir(exist_ok=True)
+            for a, b in moves + renames:
+                os.rename(a, b)
+                done.append((a, b))
+            if folder.is_dir() and new_name != old_name:
+                if (base / new_name).exists():
+                    raise FileExistsError(17, "there is already a folder with that name", str(base / new_name))
+                os.rename(folder, base / new_name)
+        except OSError as e:
+            for a, b in reversed(done):  # put everything back as it was
+                try:
+                    os.rename(b, a)
+                except OSError:
+                    pass
+            return {"ok": False, "error": f"Could not rename ({e.strerror}). Nothing was changed."}
+        st["roll"] = new_name
+        st["rolls"].pop(old_name, None)
+        self._remember_roll()
+        self.save_settings()
+        words = f"roll number changed: {old_name} is now {new_name}"
+        if renames:
+            words += f", {len(renames)} file(s) renamed to R{number:03d}"
+        self.say(words)
+        for d, to in moves:
+            self.say(f"moved aside, untouched: {d.name} is now in {ASIDE_FOLDER}/{to.name}")
+        log = base / new_name / "ScanLog.txt"
+        if log.is_file():
+            try:
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Roll number changed: {old_name} is now {new_name}."
+                            f" Earlier lines use the old names.\n\n")
+            except OSError:
+                pass
+        return {"ok": True, "roll": new_name, "renamed": len(renames), "moved": [d.name for d, _ in moves]}

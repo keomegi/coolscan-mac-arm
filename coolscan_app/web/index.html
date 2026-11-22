@@ -1,0 +1,96 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan</title>
+<link rel="stylesheet" href="/style.css"></head><body>
+<header><h1>Coolscan</h1><span id="status">starting…</span><span style="flex:1"></span>
+<button id="b-connect">Connect</button><button id="b-load">Load</button><button id="b-eject">Eject</button></header>
+<main><div>
+<section><h2>Film</h2>
+<label>Film type<select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative</option></select></label>
+<label id="fmtrow">Format<select id="s-format"><option value="">From holder</option></select></label>
+</section>
+<section><h2>Preview</h2>
+<button class="primary" id="b-thumb">Thumbnail only</button><button id="b-preview">Preview</button>
+<label>Preview from<select id="s-preview_mode"><option value="scan">Preview scan (sharper)</option><option value="thumbnail">Thumbnail (fast)</option></select></label>
+<label>Preview scan dpi<select id="s-preview_dpi"></select></label>
+<label>Invert negatives in preview<input type="checkbox" id="s-invert_preview"></label>
+<label>Thumbnail when film goes in<input type="checkbox" id="s-auto_thumbnail"></label>
+<label>Rotate all 180°<input type="checkbox" id="s-rotate180"></label>
+<div>Rotate selected <button id="b-rl" title="90° left">⟲ 90°</button><button id="b-rr" title="90° right">⟳ 90°</button></div>
+<p class="hint">Click a frame to select it, ⌘-click to add or remove one, Shift-click for a range. Rotation applies to the previews and to the saved scans.</p>
+<p class="hint">Thumbnail only: one quick pass over the strip. "Thumbnail (fast)" cuts each frame out of that pass instead of scanning it again.</p>
+</section>
+<section><h2>Focus &amp; exposure</h2>
+<div class="sub">Do once, now</div>
+<button class="primary" id="b-cal">Calibrate</button><button id="b-af">Autofocus</button><button id="b-ae">Auto exposure</button><button id="b-unlock">Reset</button>
+<p class="hint">Each button does its job once, right away, on the selected frame (or frame 1). Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame. Reset undoes that.</p>
+<p class="hint" id="calinfo"></p>
+<div class="sub">Settings, used for every preview and scan</div>
+<label>Focus<select id="s-focus_mode"><option value="frame">Autofocus each frame once</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
+<label id="posrow">Lens position<input type="number" id="s-focus_position"></label>
+<label>Focus point<span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
+<label>Exposure<select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
+<label>White balance<select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
+</section>
+<section><h2>Roll</h2>
+<select id="rollpick" title="The roll you are scanning. Pick another one to carry on in it."></select><div class="hint" id="rollfilm"></div>
+<p class="hint warn" id="rollpickmsg" hidden></p>
+<label>Roll number<span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
+<div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
+<button class="primary" id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div>
+<div>Film description</div>
+<textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
+<p class="hint" id="rolldeschint">Saved as Description.txt in the roll folder, and updated whenever you change it.</p>
+<button id="b-newroll">New roll…</button>
+<div id="rolldlg" hidden style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+<p class="hint">Start a new folder for the next roll? Film details are optional; they name the folder and go into the files.</p>
+<label>Brand<input type="text" id="r-film_brand" placeholder="e.g. Kodak"></label>
+<label>Film<input type="text" id="r-film_stock" placeholder="e.g. Portra"></label>
+<label>ISO<input type="text" id="r-film_iso" placeholder="e.g. 400"></label>
+<label>Notes<input type="text" id="r-film_notes" placeholder="e.g. Summer 2005"></label>
+<div>Film description</div>
+<textarea id="r-film_description" placeholder="Optional. Saved as Description.txt in the new roll's folder."></textarea>
+<button class="primary" id="b-rollok">Start new roll</button><button id="b-rollcancel">Cancel</button>
+</div></section>
+<section><h2>When a strip is done</h2>
+<label>Banner on this Mac<input type="checkbox" id="s-notify_mac"></label>
+<label>Run a shortcut<input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
+<label>ntfy topic<input type="text" id="s-notify_ntfy" placeholder="optional"></label>
+<p class="hint">Tells you when a batch finishes or stops on an error. "Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you (an email to yourself, a reminder with an alert, a push app). ntfy is a free phone app that needs no shortcut.</p>
+<button id="b-notifytest">Send a test</button>
+</section>
+<section><h2>Scan</h2>
+<label>Resolution (dpi)<select id="s-dpi"></select></label>
+<label>Multi-sample<select id="s-samples"></select></label>
+<p class="hint" id="mshint"></p>
+<label>Also save the infrared picture (_IR.tif)<input type="checkbox" id="s-ir"></label>
+<p class="hint">The infrared picture shows only the dust and scratches. Dust removal uses it either way; tick this only if you want it as an extra file next to each picture.</p>
+<label>Dust &amp; scratch removal<input type="checkbox" id="s-clean"></label>
+<label id="dustrow">Dust removal by<select id="s-dust_method"><option value="builtin">Built in (one pass)</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver, second pass (slow)</option></select></label>
+<label>Grain reduction<select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
+<label>Restore faded colours<select id="s-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
+<label>Archive mode<input type="checkbox" id="s-archive"></label>
+<p class="hint" id="archint">Archive mode saves two folders from one pass: RAW (untouched scan with infrared as a 4th channel) and Positive (finished picture, dust removed if ticked).</p>
+<label id="negrow">Negatives saved as<select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
+<label>Folder<input type="text" id="s-outdir"></label>
+<label>Negative tone<select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
+<label>Colour space<select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
+<label>File name prefix<input type="text" id="s-basename" placeholder="optional"></label>
+<label>Scan date in name<input type="checkbox" id="s-name_date"></label>
+<label>Counter digits<input type="number" id="s-digits" min="1" max="6"></label>
+<label>Next number<input type="number" id="s-start" min="1"></label>
+<p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
+<label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
+<p class="hint">Galleries sort the scans by this date instead of today's. With only a year, the files get today's day and time in that year. The real scan date stays in the file's description. Leave empty to use today.</p>
+<p class="hint" id="nameex"></p>
+<p class="hint">Names are built as prefix, scan date, picture number, then the number of the roll you are scanning, which is always there. The prefix and the date are optional and bring no "_" when left out.</p>
+<label>Stop on errors<input type="checkbox" id="s-stop_on_errors"></label>
+<label>Eject film when done<input type="checkbox" id="s-eject_after"></label>
+<label>Write scan log<input type="checkbox" id="s-scan_log"></label>
+<p class="hint">If a frame fails (for example autofocus), the rest of the strip is still scanned unless "Stop on errors" is ticked. The scan log is ScanLog.txt in the roll folder.</p>
+<button class="primary" id="b-scan">Scan all frames</button><button id="b-stop">Stop</button>
+<p class="hint">Scans the whole strip in one go. To scan only some frames, select them first (click, ⌘-click, Shift-click) and the button scans just those.</p>
+</section></div>
+<div><section><h2>Thumbnail</h2><div id="thumbwrap"><div class="inner"><img id="thumb" alt=""></div></div><p class="hint" id="nothumb">No thumbnail yet.</p></section>
+<section><h2>Frames</h2><div id="grid"></div></section>
+<section><h2>Activity</h2><div id="timing" hidden></div><div class="hint" id="progtxt" hidden></div><progress id="prog" value="0" max="1" hidden></progress><div id="log"></div></section></div></main>
+<script src="/app.js"></script></body></html>

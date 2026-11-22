@@ -27,6 +27,29 @@ You see `(.venv)` at the start of the Terminal prompt while the environment is o
 Your browser opens on the app. Press Ctrl-C in Terminal to quit.
 To try the screens without the scanner: `python coolscan.py --demo`.
 
+## How the app is put together
+
+`coolscan.py` only starts the app. The app itself is the `coolscan_app` folder next to it,
+one file per job:
+
+| File | What it does |
+| --- | --- |
+| `app.py` | the scanner session: connect, thumbnail, preview, focus, exposure, film watcher |
+| `scanning.py` | scanning frames and saving them, scan log, scan times |
+| `rolls.py` | file names, roll folders, roll numbers, film descriptions |
+| `settings.py` | the settings and how they are kept between runs |
+| `colour.py` | negative to positive, pictures for the screen, colour spaces and profiles |
+| `dust.py` | dust and scratch removal from the infrared picture |
+| `enhance.py` | grain reduction, faded-colour restoration, lining passes up |
+| `imaging.py` | writing TIFF and PNG files |
+| `notify.py` | banner, shortcut and ntfy messages |
+| `driver.py` | the stall check, and the driver's failures in plain words |
+| `demo.py` | the pretend scanner |
+| `server.py` | the web page's server and the start-up |
+| `web/` | the page itself: `index.html`, `style.css`, `app.js` |
+
+Settings and the current roll stay in `~/.coolscan.json`, as before.
+
 ## What the buttons do
 
 - **Thumbnail only**: one quick pass over the strip. Shows the whole strip with the frames found.
