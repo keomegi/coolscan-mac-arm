@@ -1174,6 +1174,7 @@ class App:
         self.job = None
         self.progress = None
         self.cancel = False
+        self.batch_day = None  # the date in the file names of the batch being scanned
         self.version = 0
         self.settings = {
             "film": "negative", "format": "", "preview_mode": "scan", "preview_dpi": 290,
@@ -1182,11 +1183,11 @@ class App:
             "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
             "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
             "basename": "Scan", "suffix": "", "digits": 3, "start": 0, "archive": False, "photo_date": "",
-            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 3,
+            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 4,
             "stop_on_errors": False, "scan_log": True, "eject_after": False, "auto_thumbnail": True,
             "dust_method": "builtin", "grain": 0, "restore": 0,
             "notify_mac": False, "notify_imessage": "", "notify_ntfy": "",
-            "roll": "", "roll_tag": "overall", "roll_day": "", "roll_day_count": 1, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
+            "roll": "", "roll_tag": "overall", "name_date": True, "roll_day": "", "roll_day_count": 1, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
             "film_description": "",
         }
 
@@ -1735,10 +1736,12 @@ class App:
         self.say("calibrated: every preview and scan now uses this focus and exposure")
 
     def _stem(self, folders, n):
-        """Nikon Scan's naming: prefix + zero-padded counter + suffix, e.g. Scan001."""
+        """The name without ".tif": prefix, scan date, roll number, picture number, suffix,
+        e.g. Scan_20261122_R001_005. A part that is left out brings no underscore."""
         st = self.settings
         digits = min(6, max(1, int(st["digits"] or 3)))
-        return f"{self._prefix()}{n:0{digits}d}{self._clean_name(st['suffix'])}{self._roll_tag()}"
+        return (self._prefix() + "".join(part + "_" for part in self._name_parts())
+                + f"{n:0{digits}d}" + self._clean_name(st["suffix"]))
 
     @staticmethod
     def _clean_name(text):
@@ -1790,17 +1793,19 @@ class App:
             typed = 0
         return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
 
-    def _roll_tag(self):
-        """The roll number at the end of the name, e.g. _R02 for the 2nd roll today."""
+    def _name_parts(self):
+        """What stands between the prefix and the picture number: the scan date, then the roll number."""
         st = self.settings
+        parts = []
+        if st["name_date"]:
+            # the day of the scan; one batch keeps one date even if it runs past midnight
+            parts.append(self.batch_day or time.strftime("%Y%m%d"))
         mode = st["roll_tag"]
         if mode == "overall":
-            return f"_R{self._roll_number(st['roll'] or '') or 1:03d}"
-        if mode in ("day", "date_day"):
-            date = st["roll_day"] or time.strftime("%Y%m%d")
-            day = f"_{date}" if mode == "date_day" else ""
-            return f"{day}_R{int(st['roll_day_count'] or 1):02d}"
-        return ""
+            parts.append(f"R{self._roll_number(st['roll'] or '') or 1:03d}")
+        elif mode in ("day", "date_day"):
+            parts.append(f"R{int(st['roll_day_count'] or 1):02d}")
+        return parts
 
     def _next_number(self, folders, n):
         """n, or the first number after it whose name is still free in every one of the folders."""
@@ -1950,12 +1955,16 @@ class App:
         new_name = re.sub(r"^Roll \d+", f"Roll {number:03d}", old_name) if old_number else f"Roll {number:03d}"
         folder = base / old_name
         # work out every change first, and stop before touching anything if one of them could not be made
-        tag = re.compile(rf"_R{old_number:03d}(?=(?:_[A-Za-z0-9]+)?\.tiff?$)", re.I)
+        # R003 as a part of its own: before the picture number (20261122_R003_005.tif) or, in names
+        # from earlier versions, at the end (Scan005_R003.tif, Scan005_R003_IR.tif)
+        tag = re.compile(rf"(?:(?<=_)|^)R{old_number:03d}(?=_\d+[^/]*\.tiff?$|(?:_[A-Za-z]+)?\.tiff?$)", re.I)
         renames = []
         if folder.is_dir() and number != old_number:
             for p in sorted(folder.rglob("*")):
-                if p.is_file() and tag.search(p.name):
-                    renames.append((p, p.with_name(tag.sub(f"_R{number:03d}", p.name))))
+                hits = list(tag.finditer(p.name)) if p.is_file() else []
+                if hits:
+                    last = hits[-1]
+                    renames.append((p, p.with_name(p.name[:last.start()] + f"R{number:03d}" + p.name[last.end():])))
         targets = [t for _, t in renames]
         if len(set(targets)) != len(targets) or any(t.exists() for t in targets):
             return {"ok": False, "error": "Some files in this roll already have that roll number in their name. Nothing was changed."}
@@ -1990,7 +1999,7 @@ class App:
         self.save_settings()
         words = f"roll number changed: {old_name} is now {new_name}"
         if renames:
-            words += f", {len(renames)} file(s) renamed to _R{number:03d}"
+            words += f", {len(renames)} file(s) renamed to R{number:03d}"
         self.say(words)
         for d, to in moves:
             self.say(f"moved aside, untouched: {d.name} is now in {ASIDE_FOLDER}/{to.name}")
@@ -2044,7 +2053,10 @@ class App:
             # the start number used to sit at 1 for good; now the roll counts on by itself
             if self.settings["start"] <= 1:
                 self.settings["start"] = 0
-        self.settings["defaults_version"] = 3
+        if self.settings["roll_tag"] == "date_day":
+            # the date now has its own switch
+            self.settings["roll_tag"], self.settings["name_date"] = "day", True
+        self.settings["defaults_version"] = 4
         self.save_settings()
 
     def _meta(self, n):
@@ -2128,6 +2140,7 @@ class App:
             self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using the built-in dust removal")
         log = self._scan_log_open(outdir, len(indices))
         name_folders = self._name_folders()
+        self.batch_day = time.strftime("%Y%m%d")
         n = self.next_number()
         done, failed, ending = 0, [], "completed"
         roll = st["roll"] or outdir.name
@@ -2168,6 +2181,7 @@ class App:
             self.notify(words % roll, words % roll_plain)
             raise
         finally:
+            self.batch_day = None
             if done and int(st["start"] or 0) > 0:
                 st["start"] = 0  # a typed number is used once; after that the roll counts on by itself
                 self.save_settings()
@@ -2515,7 +2529,8 @@ body.picking .frame img{cursor:crosshair}
 <label>Resolution (dpi)<select id="s-dpi"></select></label>
 <label>Multi-sample<select id="s-samples"></select></label>
 <p class="hint" id="mshint"></p>
-<label>Save infrared<input type="checkbox" id="s-ir"></label>
+<label>Also save the infrared picture (_IR.tif)<input type="checkbox" id="s-ir"></label>
+<p class="hint">The infrared picture shows only the dust and scratches. Dust removal uses it either way; tick this only if you want it as an extra file next to each picture.</p>
 <label>Dust &amp; scratch removal<input type="checkbox" id="s-clean"></label>
 <label id="dustrow">Dust removal by<select id="s-dust_method"><option value="builtin">Built in (one pass)</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver, second pass (slow)</option></select></label>
 <label>Grain reduction<select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
@@ -2528,13 +2543,15 @@ body.picking .frame img{cursor:crosshair}
 <label>Colour space<select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
 <label>File name prefix<input type="text" id="s-basename" placeholder="optional"></label>
 <label>Suffix<input type="text" id="s-suffix"></label>
-<label>Roll number in name<select id="s-roll_tag"><option value="overall">Overall roll (_R017)</option><option value="day">Roll of the day (_R02)</option><option value="date_day">Date + roll of the day (_20261122_R02)</option><option value="none">None</option></select></label>
+<label>Scan date in name<input type="checkbox" id="s-name_date"></label>
+<label>Roll number in name<select id="s-roll_tag"><option value="overall">Overall roll (R017)</option><option value="day">Roll of the day (R02)</option><option value="none">None</option></select></label>
 <label>Counter digits<input type="number" id="s-digits" min="1" max="6"></label>
 <label>Next number<input type="number" id="s-start" min="1"></label>
 <p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
 <label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
 <p class="hint">Galleries sort the scans by this date instead of today's. The real scan date stays in the file's description. Leave empty to use today.</p>
 <p class="hint" id="nameex"></p>
+<p class="hint">Names are built as prefix, scan date, roll number, picture number. A part you leave out brings no "_" with it.</p>
 <label>Stop on errors<input type="checkbox" id="s-stop_on_errors"></label>
 <label>Eject film when done<input type="checkbox" id="s-eject_after"></label>
 <label>Write scan log<input type="checkbox" id="s-scan_log"></label>
@@ -2550,7 +2567,7 @@ let S=null, sel=new Set(), lastV=-1, stamp=Date.now();
 const $=id=>document.getElementById(id);
 async function api(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return r.json()}
 function selList(){return [...sel].sort((a,b)=>a-b)}
-const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','suffix','digits','start','photo_date','colour_space','roll_tag','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail','dust_method','grain','restore','notify_mac','notify_imessage','notify_ntfy'];
+const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','suffix','digits','start','photo_date','colour_space','roll_tag','name_date','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail','dust_method','grain','restore','notify_mac','notify_imessage','notify_ntfy'];
 let picking=false;
 keys.forEach(k=>{const e=$('s-'+k);e.addEventListener('change',()=>{const v=e.type=='checkbox'?e.checked:e.value;api('/api/settings',{[k]:v})})});
 $('b-fpoint').onclick=()=>{if(S.settings.focus_point){api('/api/settings',{focus_point:null});return}picking=!picking;document.body.classList.toggle('picking',picking);$('fpoint').textContent=picking?'click a preview…':'centre'};

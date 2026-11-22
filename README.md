@@ -47,8 +47,11 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   ⌘-click adds or removes one, Shift-click selects a range.
 - **Scan all frames** (batch scan): scans every frame on the strip, one after the other, into the
   roll folder with continuing numbers. Select frames first and the button becomes
-  "Scan N selected frames" and scans only those. Full scans are saved as 16-bit TIFF, plus
-  `_IR.tif` when "Save infrared" is on.
+  "Scan N selected frames" and scans only those. Full scans are saved as 16-bit TIFF.
+- **Also save the infrared picture (_IR.tif)**: when ticked, each frame gets a second file ending
+  in `_IR.tif`, a grey picture that shows only the dust and scratches. It is an extra for
+  checking or for other software. Dust removal works the same with it unticked, and "Negatives
+  saved as" has nothing to do with it.
 - **Dust & scratch removal**: uses the infrared channel to find dust and scratches and rebuilds
   the picture under them. The method is nkscan's. "Dust removal by" picks where it runs:
   *Built in (one pass)* cleans the scan in the app, *Driver, second pass* is the older, slower
@@ -69,9 +72,11 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   the infrared as a 4th channel (RGBI, like SilverFast's archive files). `Positive/` holds the
   finished picture, inverted if it is a negative, with dust removed if ticked. Both come from
   one pass, so a frame takes about half as long as it did with two passes.
-- **File names**: prefix + `_` + 3-digit counter + suffix + roll number, e.g. `Scan_001_R002.tif`.
-  The prefix is optional: leave it empty and the name is `001_R002.tif`. The `_` belongs to the
-  prefix, so there is none without it.
+- **File names** are built in this order: prefix, scan date, roll number, picture number, e.g.
+  `20261122_R001_005.tif`, or `Scan_20261122_R001_005.tif` with a prefix. Every part is
+  optional (prefix field, "Scan date in name", "Roll number in name") and brings its own `_`,
+  so a part you leave out leaves no stray underscore. The date is the day of the scan, not the
+  "Photo taken" date. A batch that runs past midnight keeps the date it started with.
 - **Next number**: shows the number the next scan gets. It counts on by itself from the pictures
   already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
   another number to carry on from there; it is used for the next batch, then the roll counts on
@@ -80,7 +85,7 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   as a starting point for editing (for example Lightroom's Auto). "Nikon Scan look" gives
   negatives the same brightness and contrast as Nikon Scan, measured on five frames scanned in
   both programs.
-- **Roll number in name**: file names end with the roll number, e.g. `Scan_001_R002.tif`.
+- **Roll number in name**: the overall roll number (`R002`), the roll of the day (`R02`), or none.
 - **Colour space**: finished pictures are saved in ProPhoto RGB by default, converted through
   Nikon's LS-40 profile, with the ProPhoto profile embedded. Also Adobe RGB (1998), sRGB,
   Apple RGB, ColorMatch, Bruce, Wide Gamut, or Scanner RGB (Nikon's profile, no conversion).
@@ -155,8 +160,9 @@ Added on 2026-11-22 in the evening, none of it run on the scanner yet:
   landed within about 0.1 to 0.4 pixel of each other, which is why it should work.
 - Messages: the iMessage and the banner run through macOS and could only be tested with a
   stand-in, so use "Send a test" first. ntfy was tested against a local stand-in server.
-- Roll number change, film description, optional prefix and the next number: pretend scanner
-  and a browser, with real folders and files.
+- Roll number change, film description, the file name order (prefix, date, roll, number) and
+  the next number: pretend scanner and a browser, with real folders and files, including rolls
+  that hold names from the earlier versions.
 
 The error help, the film-moved check, the thumbnail when film goes in, carrying on after a
 failed frame, eject when done and the scan log are tested with the pretend scanner only, with failures made up to look like nkscan's.
