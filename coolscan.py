@@ -27,15 +27,18 @@ import math
 import os
 import re
 import struct
+import subprocess
 import sys
 import threading
 import time
 import traceback
+import types
+import urllib.request
 import webbrowser
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 try:
     import numpy as np
@@ -46,6 +49,10 @@ FILMS = ["negative", "positive", "kodachrome", "mono"]
 PREVIEW_MAX_SIDE = 1400
 WATCH_SECONDS = 2  # how often the idle scanner is asked whether film is in
 HEADROOM = 0.02  # fraction of the range left free below black and above white in positives
+DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll's folder
+ASIDE_FOLDER = "Earlier rolls"          # where older roll folders go when their number is taken over
+_NAME_END = re.compile(r"(?:_IR|_negative)?\.tiff?$", re.I)   # how a saved picture's name ends
+_NAME_ROLL = re.compile(r"(?:_\d{8})?_R\d{2,3}$")              # the roll number before that, if any
 SETTINGS_FILE = Path.home() / ".coolscan.json"  # settings and the current roll, kept between runs  # pixels; previews are shrunk to this for the browser
 
 
@@ -228,7 +235,7 @@ def invert_negative(planes, tone="nikon"):
     return out
 
 
-def display_image(planes, film, invert=True, tone="nikon"):
+def display_image(planes, film, invert=True, tone="nikon", restore=0):
     """Turn scanner planes (dict name -> uint16) into an 8-bit picture for the browser."""
     names = [n for n in ("red", "green", "blue") if n in planes] or [next(iter(planes))]
     stack = [planes[n] for n in names]
@@ -237,15 +244,15 @@ def display_image(planes, film, invert=True, tone="nikon"):
     out = []
     if film in ("negative", "mono") and invert:
         # the same conversion as "save as positive", so the preview shows what is saved
-        for v in invert_negative([p[::step, ::step] for p in stack], tone):
+        for v in restore_colour(invert_negative([p[::step, ::step] for p in stack], tone), restore):
             out.append((v * 255 + 0.5).astype(np.uint8))
         return np.dstack(out) if len(out) == 3 else out[0]
     for p in stack:
         v = p[::step, ::step].astype(np.float32)
         lo, hi = np.percentile(v, (0.1, 99.9))
         v = (v - lo) / max(hi - lo, 1e-6)
-        v = np.clip(v, 0, 1) ** (1 / 2.2)
-        out.append((np.clip(v, 0, 1) * 255 + 0.5).astype(np.uint8))
+        out.append(np.clip(v, 0, 1) ** np.float32(1 / 2.2))
+    out = [(np.clip(v, 0, 1) * 255 + 0.5).astype(np.uint8) for v in restore_colour(out, restore)]
     return np.dstack(out) if len(out) == 3 else out[0]
 
 
@@ -441,6 +448,497 @@ def convert_planes(planes, space, scanner_icc=None):
     return out, icc_profile(space)
 
 
+# ---------------------------------------------------------------- dust removal from the infrared
+#
+# The same method nkscan uses inside a pass (its dust.rs, MIT/Apache-2.0, which
+# follows a6o's openICE), written for numpy so it can run on a scan that is
+# already in memory. That is what lets Archive mode keep the untouched RAW and
+# make the cleaned picture from one pass.
+#
+# Everything is done in log space, D(v) = 4096 * log2(v + 1). Dust blocks
+# infrared and film dyes hardly do, so a pixel whose infrared is below clear
+# film is rebuilt from its clean neighbours at three sizes, and the infrared
+# shortfall is added back as light.
+
+_DUST_M = 65535.0
+_DUST_TAU = 8847.23                 # infrared above this is clear film
+_DUST_LEAK = {True: 0.17, False: 0.14}   # red->infrared leakage when it cannot be measured (negative, positive)
+_DUST_ALPHA = (0.015, 0.015, 0.025)      # grain put back into rebuilt pixels, per channel
+# the LS-40 / LS-50 constants (nkscan's "kind 9")
+_DUST_THETA, _DUST_RAMP, _DUST_CONTRAST_DPI = 1.0, -960.52, 2500
+_DUST_A = (((2.210, 2.090), (2.170, 2.080), (2.040, 1.960)),
+           ((2.230, 2.130), (2.140, 2.050), (1.930, 1.840)),
+           ((2.130, 2.040), (2.080, 2.020), (1.970, 1.890)))
+_DUST_LUT = None
+
+
+def _dust_lut():
+    global _DUST_LUT
+    if _DUST_LUT is None:
+        _DUST_LUT = (np.log2(np.arange(65536, dtype=np.float64) + 1.0) * (_DUST_M / 16)).astype(np.float32)
+    return _DUST_LUT
+
+
+def _dust_d(fraction):
+    """D of the 16-bit level at `fraction` of full scale."""
+    return float(_dust_lut()[int(_DUST_M * fraction)])
+
+
+def dust_calibrate(red, ir, negative=True):
+    """Measure how much of the red image leaks into the infrared and what clear film reads.
+
+    red, ir: 2-D uint16 (a thinned-out copy of the frame is enough). Returns (c, ir_ref),
+    or None when there is no clear film in view.
+    """
+    lut = _dust_lut()
+    clear = ir > _DUST_TAU
+    if not clear.any():
+        return None
+    d_r, d_ir = lut[red], lut[ir]
+    w = ir[clear].astype(np.float64) ** 2
+    r_ref = float((w * d_r[clear]).sum() / w.sum())
+    ir_raw = float((w * d_ir[clear]).sum() / w.sum())
+    rows8, cols8 = red.shape[0] // 8, red.shape[1] // 8
+    num = den = 0.0
+    if rows8 and cols8:
+        def tiles(a):
+            return a[:rows8 * 8, :cols8 * 8].reshape(rows8, 8, cols8, 8)
+        whole = tiles(clear).all(axis=(1, 3))   # tiles that are clear film all through: what varies is dye
+        tr, tir = tiles(d_r).astype(np.float64), tiles(d_ir).astype(np.float64)
+        tile_r, tile_ir = tr.sum(axis=(1, 3)), tir.sum(axis=(1, 3))
+        tile_raw = tiles(ir).astype(np.float64).sum(axis=(1, 3))
+        for dy, dx in ((0, 0), (0, 4), (4, 0), (4, 4)):
+            delta_r = tr[:, dy:dy + 4, :, dx:dx + 4].sum(axis=(1, 3)) / 16 - tile_r / 64
+            delta_ir = tir[:, dy:dy + 4, :, dx:dx + 4].sum(axis=(1, 3)) / 16 - tile_ir / 64
+            with np.errstate(divide="ignore", invalid="ignore"):
+                slope = delta_ir / delta_r
+            ok = whole & np.isfinite(slope) & (np.abs(slope) <= 0.2)
+            weight = delta_r * delta_r * tile_raw * tile_raw
+            num += float((slope[ok] * weight[ok]).sum())
+            den += float(weight[ok].sum())
+    c = num / den if den > 0 else _DUST_LEAK[bool(negative)]
+    return c, (ir_raw - c * r_ref) / (1 - c)
+
+
+def _dust_sums(a):
+    """The three neighbourhood sums of nkscan's pyramid: 9x9 octagon, 5x5 octagon, 3x3 tent.
+
+    Outside the array counts as zero.
+    """
+    rows, cols = a.shape
+    p = np.zeros((rows + 8, cols + 8), np.float32)
+    p[4:-4, 4:-4] = a
+
+    def across(k):  # columns shifted by k, all padded rows kept
+        return p[:, 4 + k:4 + k + cols]
+
+    s3 = across(-1) + across(0) + across(1)
+    tent_h = s3 + across(0)
+    s5 = s3 + across(-2) + across(2)
+    s7 = s5 + across(-3) + across(3)
+    s9 = s7 + across(-4) + across(4)
+
+    def down(s, k):
+        return s[4 + k:4 + k + rows]
+
+    box9 = down(s5, -4) + down(s5, 4) + down(s7, -3) + down(s7, 3)
+    for k in (-2, -1, 0, 1, 2):
+        box9 = box9 + down(s9, k)
+    box5 = down(s3, -2) + down(s3, 2) + down(s5, -1) + down(s5, 0) + down(s5, 1)
+    tent = down(tent_h, -1) + 2 * down(tent_h, 0) + down(tent_h, 1)
+    return box9, box5, tent
+
+
+def _dust_uniform(index, channel):
+    """A fixed pseudo-random number in [0, 1) per pixel and channel (the same hash as nkscan)."""
+    x = (index.astype(np.uint64) << np.uint64(2)) | np.uint64(channel)
+    x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return ((x ^ (x >> np.uint64(31))) & np.uint64(0xFFFFFF)).astype(np.float32) / np.float32(1 << 24)
+
+
+def _dust_band(planes, ir, out, y0, y1, c, ir_ref, dpi):
+    """Clean rows y0..y1 of the frame into `out`; returns how many pixels were rebuilt."""
+    rows, cols = ir.shape
+    lut = _dust_lut()
+    halo = 6
+    r0, r1 = max(0, y0 - halo), min(rows, y1 + halo)
+    own = slice(y0 - r0, y1 - r0)
+    dens = [lut[p[r0:r1]] for p in planes]
+    g = (lut[ir[r0:r1]] - c * dens[0]) / (1 - c) - _DUST_THETA
+    gate = g
+    if dpi > 550:  # the weight looks at the darkest of three pixels side by side
+        gate = np.minimum(g, np.minimum(np.concatenate([g[:, :1], g[:, :-1]], axis=1),
+                                        np.concatenate([g[:, 1:], g[:, -1:]], axis=1)))
+    ramp_bias = ir_ref + _dust_d(0.98) - _DUST_M
+    w = np.clip(1.0 + (ramp_bias - gate) / _DUST_RAMP, 0.02, 1.0).astype(np.float32)
+
+    # which pixels to rebuild: infrared below clear film, and not inside a wide dark area
+    # (the film holder, the frame edge), where there is nothing clean to rebuild from
+    dark = g < _dust_d(0.065)
+    n = r1 - r0
+    padded = np.ones((n, cols + 8), bool)
+    padded[:, 4:-4] = dark
+    row_dark = np.ones((n, cols), bool)
+    for k in range(9):
+        row_dark &= padded[:, k:k + cols]
+    yy = np.arange(y0, y1)
+    above = row_dark[np.maximum(yy - 4, 0) - r0]
+    below = row_dark[np.minimum(yy + 4, rows - 1) - r0]
+    sides = np.ones((y1 - y0, cols), bool)
+    for k in range(-4, 5):
+        r = yy + k
+        ok = (r >= 0) & (r < rows)
+        sides[ok] &= dark[r[ok] - r0]
+    xx = np.arange(cols)
+    left, right = sides[:, np.maximum(xx - 4, 0)], sides[:, np.minimum(xx + 4, cols - 1)]
+    mask = ~(above | below | left | right) & (w[own] < 1.0)
+    if not mask.any():
+        return 0
+
+    # the pyramid: weighted means of the gate and of each colour over three neighbourhoods
+    sw = _dust_sums(w)
+    conf = [sw[0] / 69.0, sw[1] / 21.0, sw[2] / 16.0, w]
+    inv = [np.where(s > 0, 1.0 / np.maximum(s, 1e-30), 0.0).astype(np.float32) for s in sw]
+    sg = _dust_sums(w * g)
+    pyr = [sg[k] * inv[k] for k in range(3)] + [g]
+    lo, hi = [None], [None]
+    cross = dpi > _DUST_CONTRAST_DPI
+    for level in (1, 2, 3):
+        d = pyr[level] - pyr[level - 1]
+        if cross:  # the infrared contrast over the pixel and its four neighbours
+            up = np.concatenate([d[:1], d[:-1]], axis=0)
+            dn = np.concatenate([d[1:], d[-1:]], axis=0)
+            lf = np.concatenate([d[:, :1], d[:, :-1]], axis=1)
+            rt = np.concatenate([d[:, 1:], d[:, -1:]], axis=1)
+            lo.append(np.minimum.reduce([d, up, dn, lf, rt])[own])
+            hi.append(np.maximum.reduce([d, up, dn, lf, rt])[own])
+        else:
+            lo.append(d[own])
+            hi.append(d[own])
+    confidence = [None, np.minimum(2 * conf[1][own], 1.0), conf[2][own], conf[3][own] ** 2]
+    base_gain = ir_ref - pyr[0][own]
+    index = (yy[:, None] * cols + xx[None, :])[mask]
+    eta_lo, eta_hi = _dust_d(0.01), _dust_d(0.99)
+    rebuilt, keep = [], np.ones(index.size, bool)
+    for ch in range(3):
+        sd = _dust_sums(w * dens[ch])
+        levels = [sd[k] * inv[k] for k in range(3)] + [dens[ch]]
+        a = levels[0][own] + base_gain
+        for level in (1, 2, 3):
+            detail = (levels[level][own] - levels[level - 1][own]) * 1.25
+            a_hi, a_lo = _DUST_A[ch][level - 1]
+            swap = hi[level] < 0
+            lo_t = np.where(swap, a_hi, a_lo) * lo[level]
+            hi_t = np.where(swap, a_lo, a_hi) * hi[level]
+            a = a + (np.minimum(detail - lo_t, 0) + np.maximum(detail - hi_t, 0)) * confidence[level]
+        x = a[mask]
+        d = (4.0 / (eta_hi - eta_lo) ** 2 * (x - eta_lo) * (eta_hi - x)
+             * (_dust_uniform(index, ch) - 0.5) * _DUST_ALPHA[ch] * x)
+        inside = (x > eta_lo) & (x < eta_hi) & (x + d > eta_lo) & (x + d < eta_hi)
+        x = x + np.where(inside, d, 0)
+        keep &= x > 0
+        x = np.maximum(x, dens[ch][own][mask])  # a rebuilt pixel never comes out darker than it scanned
+        v = np.clip(np.floor(np.exp2(x.astype(np.float64) * (16 / _DUST_M)) - 1.0 + 0.5), 0, 65535).astype(np.uint16)
+        rebuilt.append(np.maximum(v, planes[ch][y0:y1][mask]))
+    for ch in range(3):
+        target = out[ch][y0:y1]
+        values = target[mask]
+        values[keep] = rebuilt[ch][keep]
+        target[mask] = values
+    return int(keep.sum())
+
+
+def dust_clean(planes, ir, dpi, negative=True, band=128, progress=None):
+    """Dust and scratch removal from the infrared. Returns (cleaned planes, pixels rebuilt).
+
+    planes: [red, green, blue] uint16 as scanned (not rotated, not inverted); ir: the infrared
+    of the same pass. Returns None when the frame has no clear film to measure against.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    rows, cols = ir.shape
+    step = max(1, math.isqrt((rows * cols) // 2_500_000))
+
+    def thin(a):
+        return a[:rows - rows % step:step, :cols - cols % step:step]
+
+    cal = dust_calibrate(thin(planes[0]), thin(ir), negative) or dust_calibrate(planes[0], ir, negative)
+    if cal is None:
+        return None
+    c, ir_ref = cal
+    out = [p.copy() for p in planes]
+    starts = list(range(0, rows, band))
+    count = done = 0
+    # numpy lets other threads run while it works, so a few bands at a time is quicker
+    with ThreadPoolExecutor(max_workers=max(1, min(4, os.cpu_count() or 1))) as pool:
+        for n in pool.map(lambda y0: _dust_band(planes, ir, out, y0, min(rows, y0 + band), c, ir_ref, dpi), starts):
+            count += n
+            done += 1
+            if progress:
+                progress("dust removal", 0, done, len(starts))
+    return out, count
+
+
+# ---------------------------------------------------------------- grain reduction and colour restoration
+#
+# Our own stand-ins for Nikon Scan's GEM (grain) and ROC (faded colours). Both
+# work on the positive picture as float32 planes, values 0..1, before it is
+# converted to the output colour space, and both are off unless asked for.
+
+GRAIN_LEVELS = {1: 0.65, 2: 1.0, 3: 1.45, 4: 2.0}   # how far above the measured grain a detail must stand to be kept whole
+RESTORE_LEVELS = {1: 0.4, 2: 0.7, 3: 1.0}         # low, medium, high
+
+
+def _smooth(a, scale):
+    """Blur with the (1 4 6 4 1)/16 kernel spread out by 2**scale, across and down."""
+    step = 1 << scale
+    for axis in (0, 1):
+        n = a.shape[axis]
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (2 * step, 2 * step)
+        p = np.pad(a, pad, mode="reflect" if n > 2 * step else "edge")
+
+        def take(k):
+            sl = [slice(None), slice(None)]
+            sl[axis] = slice((2 + k) * step, (2 + k) * step + n)
+            return p[tuple(sl)]
+
+        a = (take(-2) + take(2)) * np.float32(1 / 16) + (take(-1) + take(1)) * np.float32(4 / 16) \
+            + take(0) * np.float32(6 / 16)
+    return a
+
+
+def _box3(a):
+    """The mean over each pixel's 3x3 surroundings."""
+    p = np.pad(a, 1, mode="edge")
+    rows = p[:-2] + p[1:-1] + p[2:]
+    return (rows[:, :-2] + rows[:, 1:-1] + rows[:, 2:]) * np.float32(1 / 9)
+
+
+def _grain_size(d):
+    """How strong the grain is in one layer of detail: its spread in the smoothest parts of the picture."""
+    tile = 32
+    rows, cols = (d.shape[0] // tile) * tile, (d.shape[1] // tile) * tile
+    if rows < 4 * tile or cols < 4 * tile:
+        return float(np.median(np.abs(d))) / 0.6745
+    t = np.abs(d[:rows, :cols]).reshape(rows // tile, tile, cols // tile, tile)
+    # every 4th tile each way is plenty; the calmest fifth of them are grain with little picture detail
+    spread = np.median(t[::4, :, ::4, :].transpose(0, 2, 1, 3).reshape(-1, tile * tile), axis=1)
+    return float(np.percentile(spread, 20)) / 0.6745
+
+
+def reduce_grain(planes, strength, progress=None):
+    """Smooth film grain and keep edges and texture. planes: float32 0..1; returns new planes.
+
+    The picture is split into brightness and two colour differences, each into
+    four layers of detail from fine to coarse. In every layer the grain is
+    measured in the calm parts of the picture; detail no bigger than the grain
+    is faded out, detail that stands above it is kept.
+    """
+    k = GRAIN_LEVELS.get(int(strength or 0))
+    if not k:
+        return planes
+    if len(planes) == 3:
+        r, g, b = planes
+        parts = [((r + g + b) * np.float32(1 / 3), k), (r - b, 1.6 * k), ((r + b) * np.float32(0.5) - g, 1.6 * k)]
+    else:
+        parts = [(planes[0], k)]
+    done = []
+    steps = len(parts) * 4
+    for n, (a, kk) in enumerate(parts):
+        smooth, kept = a, None
+        for scale in range(4):
+            nxt = _smooth(smooth, scale)
+            d = smooth - nxt
+            t = np.float32(kk * _grain_size(d))
+            # Detail that stands above the grain passes whole, detail the size of the grain fades
+            # away. Judged over each pixel's 3x3 surroundings, so an edge (strong all along)
+            # stays and a lone bright grain does not.
+            d *= np.maximum(np.float32(0), 1 - (t * t) / (_box3(d * d) + np.float32(1e-12)))
+            kept = d if kept is None else kept + d
+            smooth = nxt
+            if progress:
+                progress("grain reduction", 0, n * 4 + scale + 1, steps)
+        done.append(smooth + kept)
+    if len(done) == 1:
+        return [np.clip(done[0], 0, 1)]
+    y, c1, c2 = done
+    third = c2 * np.float32(1 / 3)
+    return [np.clip(y + third + c1 * np.float32(0.5), 0, 1), np.clip(y - 2 * third, 0, 1),
+            np.clip(y + third - c1 * np.float32(0.5), 0, 1)]
+
+
+def restore_colour(planes, strength):
+    """Bring back faded colours. planes: float32 0..1 (three channels); returns new planes.
+
+    Film dyes fade at different rates, which leaves a colour cast, flat contrast
+    and dull colours. Each channel gets its own black point, white point and
+    midtone so the three line up again, then the colours are strengthened.
+    A picture that really is one colour all over (a sunset) loses some of it:
+    that is the price of any automatic restoration, hence the strength setting.
+    """
+    amount = RESTORE_LEVELS.get(int(strength or 0))
+    if not amount or len(planes) != 3:
+        return planes
+    rows, cols = planes[0].shape
+    inner = (slice(rows // 20, rows - rows // 20), slice(cols // 20, cols - cols // 20))
+    step = max(1, int(math.sqrt(planes[0][inner].size / 400_000)))
+    stats = [np.percentile(p[inner][::step, ::step], (0.5, 50, 99.5)) for p in planes]
+    lo_t = min(0.02, min(s[0] for s in stats))
+    hi_t = max(0.98, max(s[2] for s in stats))
+    mid_t = float(np.mean([(s[1] - s[0]) / max(s[2] - s[0], 1e-6) for s in stats]))  # where the midtones sit, on average
+    mid_t = min(max(mid_t, 0.05), 0.95)
+    out = []
+    for p, (lo, mid, hi) in zip(planes, stats):
+        span = max(hi - lo, 1e-6)
+        m = min(max((mid - lo) / span, 0.02), 0.98)
+        gamma = min(max(math.log(mid_t) / math.log(m), 0.5), 2.0)
+        v = np.clip((p - np.float32(lo)) / np.float32(span), 0, 1)
+        np.power(v, np.float32(gamma), out=v)
+        v = v * np.float32(hi_t - lo_t) + np.float32(lo_t)
+        out.append(p + np.float32(amount) * (v - p))
+    y = (out[0] + out[1] + out[2]) * np.float32(1 / 3)
+    boost = np.float32(1 + 0.35 * amount)
+    return [np.clip(y + boost * (v - y), 0, 1) for v in out]
+
+
+# ---------------------------------------------------------------- multi-sample by averaging passes
+#
+# The LS-4000 and LS-5000 can read each line several times in one pass. A scanner
+# that reads it once (the LS-40) gets the same effect from whole passes taken at
+# one focus and exposure and averaged, as long as the passes land on each other.
+
+def pass_shift(a, b, tile=256):
+    """How far pass b sits from pass a, in pixels, at the worst of nine spots.
+
+    None when the picture has too little detail to tell. a, b: uint16 planes of one size.
+    """
+    rows, cols = a.shape
+    if rows < 2 * tile or cols < 2 * tile:
+        return None
+    window = np.outer(np.hanning(tile), np.hanning(tile)).astype(np.float32)
+    worst = None
+
+    def prepared(plane, y, x):
+        t = np.log(plane[y:y + tile, x:x + tile].astype(np.float32) + 1)
+        t = t - _box3(_box3(_box3(t)))  # fine detail only: broad tones say nothing about position
+        return (t - t.mean()) * window
+
+    def fraction(before, peak, after):  # where a parabola through three points tops out
+        bend = before - 2 * peak + after
+        return 0.0 if bend == 0 else 0.5 * (before - after) / bend
+
+    for fy in (0.25, 0.5, 0.75):
+        for fx in (0.2, 0.5, 0.8):
+            y, x = int(fy * rows) - tile // 2, int(fx * cols) - tile // 2
+            ta, tb = prepared(a, y, x), prepared(b, y, x)
+            energy = math.sqrt(float((ta * ta).sum()) * float((tb * tb).sum()))
+            if energy <= 0:
+                continue
+            cc = np.fft.irfft2(np.fft.rfft2(ta) * np.conj(np.fft.rfft2(tb)), s=ta.shape)
+            py, px = np.unravel_index(int(np.argmax(cc)), cc.shape)
+            if cc[py, px] / energy < 0.2:
+                continue  # little in common here (a flat area): no reading
+            dy = py + fraction(cc[py - 1, px], cc[py, px], cc[(py + 1) % tile, px])
+            dx = px + fraction(cc[py, px - 1], cc[py, px], cc[py, (px + 1) % tile])
+            dy, dx = (dy + tile / 2) % tile - tile / 2, (dx + tile / 2) % tile - tile / 2
+            far = math.hypot(dy, dx)
+            worst = far if worst is None else max(worst, far)
+    return worst
+
+
+# ---------------------------------------------------------------- telling the person a strip is done
+
+def _osascript(lines, *args):
+    """Run a few lines of AppleScript with arguments (so no text needs escaping)."""
+    cmd = ["osascript"]
+    for line in lines:
+        cmd += ["-e", line]
+    run = subprocess.run(cmd + list(args), capture_output=True, text=True, timeout=30)
+    if run.returncode != 0:
+        lines = (run.stderr or "").strip().splitlines()
+        raise RuntimeError(lines[-1][:200] if lines else f"osascript ended with code {run.returncode}")
+
+
+def send_banner(title, text):
+    """A notification banner on this Mac."""
+    _osascript(["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"],
+               title, text)
+
+
+def send_imessage(recipient, text):
+    """An iMessage from the Mac's Messages app, for example to the person's own phone."""
+    script = ["on run argv", 'tell application "Messages"',
+              "set theAccount to 1st account whose service type = iMessage",
+              "send (item 2 of argv) to participant (item 1 of argv) of theAccount", "end tell", "end run"]
+    try:
+        _osascript(script, recipient, text)
+    except RuntimeError:
+        # the wording older versions of Messages understand
+        script[2] = "set theAccount to 1st service whose service type = iMessage"
+        script[3] = "send (item 2 of argv) to buddy (item 1 of argv) of theAccount"
+        _osascript(script, recipient, text)
+
+
+def send_ntfy(topic, title, text):
+    """A push through ntfy (https://ntfy.sh, or the person's own server when a full address is given)."""
+    topic = topic.strip()
+    url = topic if topic.startswith(("https://", "http://")) else "https://ntfy.sh/" + quote(topic, safe="")
+    req = urllib.request.Request(url, data=text.encode("utf-8"), headers={"Title": title}, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as reply:
+        reply.read()
+
+
+# ---------------------------------------------------------------- a cleaning helper (Nikon ICE)
+#
+# If a program called ice_clean sits next to this file, it can be chosen for dust
+# removal instead of the built-in method. The app hands it the scan as a 16-bit
+# TIFF with four channels (red, green, blue, infrared; as scanned, not inverted,
+# not rotated) and reads back a 16-bit RGB TIFF of the same size:
+#
+#   ice_clean INPUT.tif OUTPUT.tif --film negative --dpi 2900 --model "LS-40 ED"
+#
+# Exit code 0 means OUTPUT.tif is good. Anything else: the built-in method is used.
+
+ICE_HELPER = Path(__file__).resolve().with_name("ice_clean")
+ICE_TIMEOUT = 600  # seconds per frame
+
+
+def read_tiff_rgb16(path):
+    """Read an uncompressed 16-bit RGB TIFF as three planes (what a cleaning helper hands back)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    order = {b"II": "<", b"MM": ">"}.get(data[:2])
+    if order is None or struct.unpack(order + "H", data[2:4])[0] != 42:
+        raise ValueError("not a TIFF file")
+    ifd = struct.unpack(order + "I", data[4:8])[0]
+    tags = {}
+    for k in range(struct.unpack(order + "H", data[ifd:ifd + 2])[0]):
+        at = ifd + 2 + 12 * k
+        tag, typ, n = struct.unpack(order + "HHI", data[at:at + 8])
+        if typ not in (3, 4):  # only the whole-number tags are needed
+            continue
+        code, size = ("H", 2) if typ == 3 else ("I", 4)
+        raw = data[at + 8:at + 12]
+        if size * n > 4:
+            off = struct.unpack(order + "I", raw)[0]
+            raw = data[off:off + size * n]
+        tags[tag] = struct.unpack(order + code * n, raw[:size * n])
+    cols, rows = tags[256][0], tags[257][0]
+    spp = tags.get(277, (1,))[0]
+    if tags.get(259, (1,))[0] != 1 or set(tags.get(258, (1,))) != {16} or spp < 3:
+        raise ValueError("expected an uncompressed 16-bit RGB TIFF")
+    pixels = b"".join(data[o:o + c] for o, c in zip(tags[273], tags[279]))
+    if len(pixels) < rows * cols * spp * 2:
+        raise ValueError("the TIFF is cut short")
+    a = np.frombuffer(pixels, order + "u2", rows * cols * spp)
+    if tags.get(284, (1,))[0] == 2:  # one plane after the other
+        a = a.reshape(spp, rows, cols)
+        return [a[k].astype(np.uint16) for k in range(3)]
+    a = a.reshape(rows, cols, spp)
+    return [np.ascontiguousarray(a[..., k]).astype(np.uint16) for k in range(3)]
+
+
 # ---------------------------------------------------------------- demo scanner
 
 class _Demo:
@@ -530,10 +1028,28 @@ class _Demo:
         r = self.Result()
         rows, cols = int(0.94 * dpi), int(1.42 * dpi)
         r.colors = self._film(rows, cols, frame[0] % 7)
+        rng = np.random.default_rng()
+        for name, plane in r.colors.items():  # noise that differs on every pass, like the real thing
+            noise = rng.integers(-400, 401, plane.shape, dtype=np.int32)
+            r.colors[name] = np.clip(plane.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
         r.ir = np.full((rows, cols), 50000, np.uint16) if (infrared or clean) else None
+        # specks and a scratch that block the light, in the picture and in the infrared
+        size = max(1, dpi // 500)
+        spots = [((53 * k + 17) % (rows - 8 * size), (211 * k + 40) % (cols - 8 * size), size * (1 + k % 3))
+                 for k in range(40)]
+        marks = [(slice(y, y + n), slice(x, x + n)) for y, x, n in spots]
+        marks.append((slice(rows // 3, rows // 3 + size), slice(cols // 4, cols // 2)))
+        dusty = 0
+        for mark in marks:
+            if r.ir is not None:
+                r.ir[mark] = 7000
+            if not clean:  # with clean=True the real driver hands back the picture already cleaned
+                for plane in r.colors.values():
+                    plane[mark] //= 5
+            dusty += r.ir[mark].size if r.ir is not None else 0
         r.dpi, r.rows, r.cols = dpi, rows, cols
         r.exposures = exposures or {"red": 1200, "green": 900, "blue": 700}
-        r.complete, r.cleaned = True, (1234 if clean else None)
+        r.complete, r.cleaned = True, (dusty if clean else None)
         r.focused = "skipped" if focus == "hold" else "focused"
         r.focus_position = self.focus
         return r
@@ -640,6 +1156,8 @@ class App:
         self.session_lock = threading.Lock()
         self.film_in = None         # what the scanner last said: film in (True), out (False), not asked (None)
         self.film_armed = True      # the next time film is seen in, show its thumbnail
+        self.ice_ready = False      # the Nikon ICE helper is there and says it can run
+        self.ice_checked = 0.0
         self.session = None
         self.caps = None            # a copy of the capabilities, refreshed on the worker thread
         self.discovery = None
@@ -663,10 +1181,13 @@ class App:
             "focus_mode": "frame", "focus_point": None, "focus_position": 0,
             "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
             "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
-            "basename": "Scan", "suffix": "", "digits": 3, "start": 1, "archive": False, "photo_date": "",
-            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 2,
+            "basename": "Scan", "suffix": "", "digits": 3, "start": 0, "archive": False, "photo_date": "",
+            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 3,
             "stop_on_errors": False, "scan_log": True, "eject_after": False, "auto_thumbnail": True,
+            "dust_method": "builtin", "grain": 0, "restore": 0,
+            "notify_mac": False, "notify_imessage": "", "notify_ntfy": "",
             "roll": "", "roll_tag": "overall", "roll_day": "", "roll_day_count": 1, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
+            "film_description": "",
         }
 
     # -- bookkeeping
@@ -701,6 +1222,10 @@ class App:
         d = self.discovery
         frames = []
         boxes = []
+        try:
+            number = self.next_number()
+        except Exception:  # noqa: BLE001 - the page must still load if the folder cannot be read
+            number = 1
         if d is not None:
             frames = list(range(len(d.frames)))
             boxes = self._thumb_boxes()
@@ -713,9 +1238,10 @@ class App:
             "focus_lock": self.focus_lock,
             "exposure_lock": self.exposure_lock, "version": self.version,
             "roll_path": str(self._base() / self.settings["roll"]) if self.settings["roll"] else None,
-            "film_text": self._film_text(),
-            "sample_name": self._stem(None, int(self.settings["start"] or 0)) + ".tif",
+            "film_text": self._film_text(), "roll_number": self._roll_number(self.settings["roll"] or ""),
+            "sample_name": self._stem(None, number) + ".tif", "next_number": number,
             "film_in": self.film_in if self.settings["auto_thumbnail"] else None,
+            "ice_helper": self.ice_ready,
         }
 
     def run_job(self, name, fn, *args):
@@ -750,12 +1276,64 @@ class App:
         self.discovery, self.thumb_png, self.film_in = None, None, None
         self.say("the next button you press (or Connect) connects to the scanner again")
 
+    def _ice_cmd(self):
+        # a copied file can lose its "may be run" mark; a Python helper still runs through Python
+        return [str(ICE_HELPER)] if os.access(ICE_HELPER, os.X_OK) else [sys.executable, str(ICE_HELPER)]
+
+    def check_ice(self):
+        """Ask the Nikon ICE helper whether it can run (it needs Wine and Nikon's own library)."""
+        ready = False
+        if ICE_HELPER.exists():
+            try:
+                ready = subprocess.run(self._ice_cmd() + ["--status"], capture_output=True, timeout=30).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                ready = False
+        self.ice_checked = time.time()
+        if ready != self.ice_ready:
+            self.ice_ready = ready
+            with self.lock:
+                self.version += 1
+        return ready
+
+    def notify(self, text, plain=None, wait=False):
+        """Tell the person, in every way they switched on. `plain` (no film notes) is what leaves the Mac for ntfy."""
+        st = self.settings
+        ways = []
+        if st["notify_mac"]:
+            ways.append(("banner on this Mac", lambda: send_banner("Coolscan", text)))
+        if st["notify_imessage"].strip():
+            ways.append((f"iMessage to {st['notify_imessage'].strip()}",
+                         lambda: send_imessage(st["notify_imessage"].strip(), "Coolscan: " + text)))
+        if st["notify_ntfy"].strip():
+            ways.append(("ntfy", lambda: send_ntfy(st["notify_ntfy"], "Coolscan", plain or text)))
+
+        def send():
+            for name, way in ways:
+                try:
+                    way()
+                    self.say(f"sent: {name}")
+                except FileNotFoundError:
+                    self.say(f"could not send ({name}): this needs a Mac")
+                except Exception as e:  # noqa: BLE001 - a message that fails must never stop scanning
+                    self.say(f"could not send ({name}): {e}")
+
+        if not ways:
+            return False
+        if wait:
+            send()
+        else:
+            threading.Thread(target=send, daemon=True).start()
+        return True
+
     # -- watching for film
     def watch(self):
         """Its own thread: while the scanner is idle, notice film going in and show its thumbnail."""
         while True:
             time.sleep(WATCH_SECONDS)
             try:
+                if time.time() - self.ice_checked > 60:
+                    self.ice_checked = time.time()
+                    threading.Thread(target=self.check_ice, daemon=True).start()
                 self._watch_once()
             except Exception:  # noqa: BLE001 - the watcher must never die
                 traceback.print_exc()
@@ -835,6 +1413,9 @@ class App:
         self.say(f"connected to {c.product}{', firmware ' + firmware if firmware else ''} "
                  f"({c.optical_dpi} dpi, frames found by {c.framing}, "
                  f"thumbnail pass: {'yes' if c.thumbnail else 'no'})")
+        many = int(getattr(c, "max_samples", 1) or 1)
+        self.say(f"multi-sample: this scanner reads each line up to {many} times in one pass" if many > 1 else
+                 "multi-sample: this scanner reads each line once, so 2x and 4x average that many passes")
         self.discovery, self.thumb_png, self.medium_seen = None, None, None
         self.previews, self.preview_info = {}, {}
         self.film_in, self.film_armed = None, True
@@ -896,7 +1477,8 @@ class App:
 
     def _png(self, planes, i=None):
         img = display_image({k: self._rot(v, i) for k, v in planes.items()}, self._film(),
-                            invert=self.settings["invert_preview"], tone=self.settings["tone"])
+                            invert=self.settings["invert_preview"], tone=self.settings["tone"],
+                            restore=self.settings["restore"])
         if i is not None and max(img.shape[:2]) < 600:
             # small thumbnail tiles are enlarged so they fill the preview box
             f = math.ceil(600 / max(img.shape[:2]))
@@ -1156,7 +1738,57 @@ class App:
         """Nikon Scan's naming: prefix + zero-padded counter + suffix, e.g. Scan001."""
         st = self.settings
         digits = min(6, max(1, int(st["digits"] or 3)))
-        return f"{st['basename']}{n:0{digits}d}{st['suffix']}{self._roll_tag()}"
+        return f"{self._prefix()}{n:0{digits}d}{self._clean_name(st['suffix'])}{self._roll_tag()}"
+
+    @staticmethod
+    def _clean_name(text):
+        return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "-", str(text or "").strip())
+
+    def _prefix(self):
+        """The optional prefix. When there is one it brings its own "_": Scan_001, and just 001 without."""
+        prefix = self._clean_name(self.settings["basename"])
+        return prefix + "_" if prefix and prefix[-1] not in "_- ." else prefix
+
+    def _name_folders(self):
+        roll = self.roll_dir()
+        return [roll, roll / "RAW", roll / "Positive"]
+
+    def _highest_number(self):
+        """The highest frame number among the pictures already in this roll, whatever their prefix."""
+        st = self.settings
+        prefix, suffix = self._clean_name(st["basename"]), self._clean_name(st["suffix"])
+        keep = min(6, max(3, int(st["digits"] or 3)))
+        highest = 0
+        for folder in self._name_folders():
+            try:
+                names = [e.name for e in os.scandir(folder) if e.is_file() and not e.name.startswith(".")]
+            except OSError:
+                continue
+            for name in names:
+                end = _NAME_END.search(name)
+                if not end:
+                    continue
+                core = _NAME_ROLL.sub("", name[:end.start()])
+                if suffix and core.endswith(suffix):
+                    core = core[:-len(suffix)]
+                rest = core[len(prefix):].lstrip("_- .") if prefix and core.startswith(prefix) else ""
+                if rest.isdigit():
+                    highest = max(highest, int(rest))
+                    continue
+                found = re.search(r"(\d+)$", core)
+                if found:
+                    text = found.group(1)
+                    highest = max(highest, int(text if len(text) <= 6 else text[-keep:]))
+        return highest
+
+    def next_number(self):
+        """The number the next scan gets: one past the highest in the roll, or the number typed in.
+        Either way it moves on past any name that is already taken, so nothing is overwritten."""
+        try:
+            typed = int(self.settings["start"] or 0)
+        except (TypeError, ValueError):
+            typed = 0
+        return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
 
     def _roll_tag(self):
         """The roll number at the end of the name, e.g. _R02 for the 2nd roll today."""
@@ -1171,7 +1803,17 @@ class App:
         return ""
 
     def _next_number(self, folders, n):
-        while any(next(f.glob(self._stem(folders, n) + "*.tif"), None) for f in folders):
+        """n, or the first number after it whose name is still free in every one of the folders."""
+        taken = set()
+        for f in folders:
+            try:
+                for e in os.scandir(f):
+                    end = _NAME_END.search(e.name)
+                    if end:
+                        taken.add(e.name[:end.start()].lower())  # the Mac's disk does not tell A from a
+            except OSError:
+                pass
+        while self._stem(folders, n).lower() in taken:
             n += 1
         return n
 
@@ -1210,6 +1852,7 @@ class App:
         st = self.settings
         for k in ("film_brand", "film_stock", "film_iso", "film_notes"):
             st[k] = str(details.get(k, "")).strip()
+        st["film_description"] = self._tidy_text(details.get("film_description", ""))
         base = self._base()
         used = [self._roll_number(d.name) for d in base.glob("Roll *")] if base.is_dir() else []
         used.append(self._roll_number(st["roll"] or ""))
@@ -1218,13 +1861,165 @@ class App:
         if film:
             name += " - " + re.sub(r'[\\/:*?"<>|]', "-", film)[:80].strip()
         st["roll"] = name
+        st["start"] = 0
         today = time.strftime("%Y%m%d")
         st["roll_day_count"] = st["roll_day_count"] + 1 if st["roll_day"] == today else 1
         st["roll_day"] = today
         self.save_settings()
         self.say(f"new roll: saving to {base / name}, numbering starts again")
+        self._write_description()
         with self.lock:
             self.version += 1
+
+    # -- film description: free text, kept as a text file in the roll's folder
+    @staticmethod
+    def _tidy_text(text):
+        return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()[:20000]
+
+    def _write_description(self):
+        """Make Description.txt in the roll folder say what the app has. True if the file was written."""
+        st = self.settings
+        folder = self.roll_dir()
+        path = folder / DESCRIPTION_FILE
+        text = st["film_description"].strip()
+        try:
+            old = path.read_text(encoding="utf-8", errors="replace").strip() if path.is_file() else None
+            if old == text or (old is None and not text):
+                return False
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n" if text else "", encoding="utf-8")
+        except (OSError, ValueError) as e:
+            self.say(f"could not write {path} ({getattr(e, 'strerror', None) or e})")
+            return False
+        return True
+
+    def read_description(self):
+        """At start: if Description.txt was edited by hand, the file is what counts."""
+        st = self.settings
+        path = self.roll_dir() / DESCRIPTION_FILE
+        try:
+            if path.is_file():
+                st["film_description"] = self._tidy_text(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            pass
+
+    def describe(self, text):
+        """The description was edited in the app. Safe during a scan: it only writes the text file."""
+        st = self.settings
+        st["film_description"] = self._tidy_text(text)
+        self.save_settings()
+        if self._write_description():
+            self.say(f"film description saved in {st['roll']}/{DESCRIPTION_FILE}")
+        with self.lock:
+            self.version += 1
+
+    # -- changing the roll number
+    def _other_rolls(self, from_number):
+        """Other roll folders numbered from_number or higher, lowest first."""
+        base, mine = self._base(), self.settings["roll"]
+        if not base.is_dir():
+            return []
+        rolls = [d for d in base.glob("Roll *") if d.is_dir() and d.name != mine
+                 and self._roll_number(d.name) >= from_number]
+        return sorted(rolls, key=lambda d: (self._roll_number(d.name), d.name))
+
+    def renumber_roll(self, number, move_aside=False):
+        """Give the roll being scanned another number: its folder and the _R... part of its file names.
+
+        Nothing is deleted or overwritten. Other rolls with that number or a higher one would
+        get in the way of counting on from here, so they are listed and nothing is changed;
+        only when the person then says so (move_aside) are they moved, whole and untouched,
+        into "Earlier rolls". Returns what the page needs to show.
+        """
+        st = self.settings
+        base = self._base()
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            number = 0
+        if not 1 <= number <= 999:
+            return {"ok": False, "error": "Pick a roll number from 1 to 999."}
+        old_name = st["roll"] or self.roll_dir().name
+        old_number = self._roll_number(old_name)
+        others = self._other_rolls(number)
+        if number == old_number and not others:
+            return {"ok": True, "same": True}
+        if others and not move_aside:
+            return {"ok": False, "aside": ASIDE_FOLDER, "in_the_way": [
+                {"name": d.name, "files": sum(1 for p in d.rglob("*") if p.is_file())} for d in others]}
+        new_name = re.sub(r"^Roll \d+", f"Roll {number:03d}", old_name) if old_number else f"Roll {number:03d}"
+        folder = base / old_name
+        # work out every change first, and stop before touching anything if one of them could not be made
+        tag = re.compile(rf"_R{old_number:03d}(?=(?:_[A-Za-z0-9]+)?\.tiff?$)", re.I)
+        renames = []
+        if folder.is_dir() and number != old_number:
+            for p in sorted(folder.rglob("*")):
+                if p.is_file() and tag.search(p.name):
+                    renames.append((p, p.with_name(tag.sub(f"_R{number:03d}", p.name))))
+        targets = [t for _, t in renames]
+        if len(set(targets)) != len(targets) or any(t.exists() for t in targets):
+            return {"ok": False, "error": "Some files in this roll already have that roll number in their name. Nothing was changed."}
+        moves = []
+        aside = base / ASIDE_FOLDER
+        taken = set()
+        for d in others:
+            to, k = aside / d.name, 2
+            while to.exists() or to in taken:
+                to, k = aside / f"{d.name} ({k})", k + 1
+            taken.add(to)
+            moves.append((d, to))
+        done = []
+        try:
+            if moves:
+                aside.mkdir(exist_ok=True)
+            for a, b in moves + renames:
+                os.rename(a, b)
+                done.append((a, b))
+            if folder.is_dir() and new_name != old_name:
+                if (base / new_name).exists():
+                    raise FileExistsError(17, "there is already a folder with that name", str(base / new_name))
+                os.rename(folder, base / new_name)
+        except OSError as e:
+            for a, b in reversed(done):  # put everything back as it was
+                try:
+                    os.rename(b, a)
+                except OSError:
+                    pass
+            return {"ok": False, "error": f"Could not rename ({e.strerror}). Nothing was changed."}
+        st["roll"] = new_name
+        self.save_settings()
+        words = f"roll number changed: {old_name} is now {new_name}"
+        if renames:
+            words += f", {len(renames)} file(s) renamed to _R{number:03d}"
+        self.say(words)
+        for d, to in moves:
+            self.say(f"moved aside, untouched: {d.name} is now in {ASIDE_FOLDER}/{to.name}")
+        log = base / new_name / "ScanLog.txt"
+        if log.is_file():
+            try:
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Roll number changed: {old_name} is now {new_name}."
+                            f" Earlier lines use the old names.\n\n")
+            except OSError:
+                pass
+        return {"ok": True, "roll": new_name, "renamed": len(renames), "moved": [d.name for d, _ in moves]}
+
+    def quick_job(self, name, fn):
+        """Run something short right now, but never while a scan or another job is running."""
+        with self.lock:
+            if self.job:
+                return {"ok": False, "busy": True}
+            self.job, self.progress = name, None
+            self.version += 1
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"That did not work ({e}). Check the folder before trying again."}
+        finally:
+            with self.lock:
+                self.job = None
+                self.version += 1
 
     def save_settings(self):
         try:
@@ -1245,7 +2040,11 @@ class App:
             # move them over once. Whatever is picked after that is kept.
             self.settings["colour_space"] = "ProPhoto RGB"
             self.settings["tone"] = "flat"
-        self.settings["defaults_version"] = 2
+        if not isinstance(saved.get("defaults_version"), int) or saved["defaults_version"] < 3:
+            # the start number used to sit at 1 for good; now the roll counts on by itself
+            if self.settings["start"] <= 1:
+                self.settings["start"] = 0
+        self.settings["defaults_version"] = 3
         self.save_settings()
 
     def _meta(self, n):
@@ -1282,11 +2081,22 @@ class App:
         "Scanner RGB" keeps Nikon's profile on slides, and labels negatives sRGB.
         """
         space = self.settings["colour_space"]
+        restore, grain = int(self.settings["restore"]), int(self.settings["grain"])
+        if restore or grain:
+            self.say(" and ".join(n for n, on in (("colour restoration", restore), ("grain reduction", grain)) if on)
+                     + " on this frame")
         if self._film() in ("negative", "mono"):
-            pos = [(v * 65535 + 0.5).astype(np.uint16) for v in invert_negative(planes, self.settings["tone"])]
+            pos = invert_negative(planes, self.settings["tone"])
+            pos = reduce_grain(restore_colour(pos, restore), grain, self._progress)
+            pos = [(v * 65535 + 0.5).astype(np.uint16) for v in pos]
             if space not in COLOUR_SPACES:
                 space = "sRGB IEC61966-2.1"
             return convert_planes(pos, space)
+        if restore or grain:
+            # slides: work on the square root of the scan, where tones and grain are spread more evenly
+            work = [np.sqrt(p.astype(np.float32) * np.float32(1 / 65535)) for p in planes]
+            work = reduce_grain(restore_colour(work, restore), grain, self._progress)
+            planes = [(np.clip(v, 0, 1) ** 2 * 65535 + 0.5).astype(np.uint16) for v in work]
         if space not in COLOUR_SPACES or not nikon_icc:
             return planes, nikon_icc
         try:
@@ -1308,19 +2118,25 @@ class App:
         folders = [raw_dir, pos_dir] if archive else [outdir]
         for f in folders:
             f.mkdir(parents=True, exist_ok=True)
+        self._write_description()
         clean = bool(st["clean"])
         job = dict(archive=archive, clean=clean, infrared=archive or bool(st["ir"] or clean),
                    raw_dir=raw_dir, pos_dir=pos_dir, outdir=outdir)
         icc = s.nikon_profile(self._film())
         job["icc"] = bytes(icc) if icc else None
+        if clean and st["dust_method"] == "ice" and not self.check_ice():
+            self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using the built-in dust removal")
         log = self._scan_log_open(outdir, len(indices))
-        n = max(0, int(st["start"] or 0))
+        name_folders = self._name_folders()
+        n = self.next_number()
         done, failed, ending = 0, [], "completed"
+        roll = st["roll"] or outdir.name
+        roll_plain = (re.match(r"Roll \d+", roll) or [roll])[0]
         try:
             for i in indices:
                 if self.cancel:
                     raise Cancelled
-                n = self._next_number(folders, n)
+                n = self._next_number(name_folders, n)
                 stem = self._stem(folders, n)
                 saved = []
                 log(f"Frame {i + 1} started {time.strftime('%H:%M:%S')}")
@@ -1346,14 +2162,21 @@ class App:
         except Cancelled:
             ending = "stopped by the user"
             raise
-        except Exception:
+        except Exception as e:
             ending = "aborted"
+            words = f"Scanning stopped after {done} of {len(indices)} frames in %s. " + explain(e).split(" [")[0]
+            self.notify(words % roll, words % roll_plain)
             raise
         finally:
+            if done and int(st["start"] or 0) > 0:
+                st["start"] = 0  # a typed number is used once; after that the roll counts on by itself
+                self.save_settings()
             missed = f", {len(failed)} failed (frame {', '.join(map(str, failed))})" if failed else ""
             log(f"Batch scan {ending} {time.strftime('%H:%M:%S')}: {done} of {len(indices)} frame(s) saved{missed}")
             log("")
         self.say(f"scan finished: {done} of {len(indices)} frame(s) saved{missed}")
+        words = f"Strip done: {done} of {len(indices)} frames saved in %s{missed}."
+        self.notify(words % roll, words % roll_plain)
         if st["eject_after"]:
             if failed:
                 self.say("not ejecting, because a frame failed and you may want to scan it again")
@@ -1394,22 +2217,48 @@ class App:
         add(f"Frames to scan: {count}")
         return add
 
+    def _dust_method(self):
+        """How dust is removed: "builtin" (from the scan in memory), "ice" (the helper) or "pass"."""
+        method = self.settings["dust_method"]
+        if method not in ("builtin", "ice", "pass") or (method == "ice" and not self.ice_ready):
+            method = "builtin"
+        return method
+
     def _scan_one(self, s, d, i, n, stem, job, saved):
         """Scan frame i and write its files. Each file written is added to `saved`."""
         st = self.settings
         icc, clean, infrared = job["icc"], job["clean"], job["infrared"]
         raw_dir, pos_dir, outdir = job["raw_dir"], job["pos_dir"], job["outdir"]
         meta = self._meta(n)
-        base = dict(dpi=int(st["dpi"]), samples=int(st["samples"]), progress=self._progress)
+        want = max(1, int(st["samples"] or 1))
+        passes = 1
+        if want > max(1, int(getattr(self.caps, "max_samples", 1) or 1)):
+            passes, want = min(want, 4), 1  # the scanner reads a line once: average whole passes instead
+        base = dict(dpi=int(st["dpi"]), samples=want, progress=self._progress)
         opts = self._scan_options(s, i, d.frames[i], infrared)
-        colours = lambda r: [self._rot(r.colors[k], i) for k in ("red", "green", "blue") if k in r.colors] \
-            or [self._rot(p, i) for p in r.colors.values()]
+        method = self._dust_method() if clean else None
+        if passes > 1 and method == "pass":
+            method = "builtin"  # the driver can only clean one pass; the average is cleaned here
+
+        def take(**kw):
+            if passes == 1:
+                return s.scan_frame(d.frames[i], **kw, **base, **opts)
+            return self._averaged(s, i, d.frames[i], passes, kw, base, opts)
+
+        def as_scanned(r):  # the colour planes the way the scanner sent them
+            return [r.colors[k] for k in ("red", "green", "blue") if k in r.colors] or list(r.colors.values())
+
+        def turned(planes):  # the way the person turned this frame
+            return [self._rot(p, i) for p in planes]
+
+        srgb_tag = lambda prof: 1 if prof and b"sRGB" in prof[:600] else 65535
         if job["archive"]:
-            # 1) the raw pass: no cleaning, infrared kept as a fourth channel
-            self.say(f"frame {i + 1}: archive scan at {st['dpi']} dpi (raw, with infrared)")
-            r = s.scan_frame(d.frames[i], infrared=True, clean=False, **base, **opts)
-            raw = colours(r)
-            planes4 = raw + ([self._rot(r.ir, i)] if r.ir is not None else [])
+            # one pass: the untouched scan with its infrared, then the finished picture made from it
+            self.say(f"frame {i + 1}: archive scan at {st['dpi']} dpi (raw, with infrared)"
+                     + (f", {passes} passes" if passes > 1 else ""))
+            r = take(infrared=True, clean=False)
+            raw = as_scanned(r)
+            planes4 = turned(raw) + ([self._rot(r.ir, i)] if r.ir is not None else [])
             write_tiff(raw_dir / f"{stem}.tif", planes4, r.dpi, icc, meta=meta)
             saved.append(f"RAW/{stem}.tif")
             self.say(f"saved RAW/{stem}.tif" + ("" if r.complete else " (warning: pass came back short)"))
@@ -1420,19 +2269,26 @@ class App:
                 write_tiff(raw_dir / f"{stem}_IR.tif", [self._rot(r.ir, i)], r.dpi, meta=meta)
                 saved.append(f"RAW/{stem}_IR.tif")
                 self.say(f"saved RAW/{stem}_IR.tif")
-            # 2) the finished picture, cleaned with the infrared
             finished = raw
-            if clean:
-                finished = self.clean_frame(s, i, d.frames[i], r, base, opts, colours)
-            pos, pos_icc = self._positive(finished, icc)
-            write_tiff(pos_dir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": 1 if pos_icc and b"sRGB" in pos_icc[:600] else 65535})
+            if method == "pass":
+                finished = self.second_pass(s, i, d.frames[i], r, base, opts, as_scanned)
+            elif method:
+                finished = self.clean_planes(raw, r.ir, r.dpi, i)
+            pos, pos_icc = self._positive(turned(finished), icc)
+            write_tiff(pos_dir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": srgb_tag(pos_icc)})
             saved.append(f"Positive/{stem}.tif")
             self.say(f"saved Positive/{stem}.tif")
             return
-        self.say(f"frame {i + 1}: scanning at {st['dpi']} dpi, {st['samples']} sample(s)"
-                 + (", cleaning dust" if clean else ""))
-        r = s.scan_frame(d.frames[i], infrared=infrared, clean=clean, **base, **opts)
-        planes = colours(r)
+        # not archive: the driver removes dust inside the pass (the same method as the built-in one)
+        in_pass = method in ("builtin", "pass") and passes == 1
+        self.say(f"frame {i + 1}: scanning at {st['dpi']} dpi"
+                 + (f", {passes} passes" if passes > 1 else f", {want} sample(s)" if want > 1 else "")
+                 + (", cleaning dust" if in_pass else ""))
+        r = take(infrared=infrared, clean=in_pass)
+        planes = as_scanned(r)
+        if method and not in_pass:
+            planes = self.clean_planes(planes, r.ir, r.dpi, i)
+        planes = turned(planes)
         note = "" if r.complete else " (warning: the pass came back short)"
         negative = self._film() in ("negative", "mono")
         if negative and st["negatives"] in ("negative", "both"):
@@ -1442,7 +2298,7 @@ class App:
             self.say(f"saved {raw_name}{note}")
         if not negative or st["negatives"] in ("positive", "both"):
             pos, pos_icc = self._positive(planes, icc)
-            write_tiff(outdir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": 1 if pos_icc and b"sRGB" in pos_icc[:600] else 65535})
+            write_tiff(outdir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": srgb_tag(pos_icc)})
             saved.append(f"{stem}.tif")
             self.say(f"saved {stem}.tif ({st['colour_space'] if st['colour_space'] in COLOUR_SPACES else 'scanner RGB'}){note}")
         if r.ir is not None and st["ir"]:
@@ -1452,14 +2308,110 @@ class App:
         if r.cleaned is not None:
             self.say(f"dust removal rebuilt {r.cleaned} pixels")
 
-    def clean_frame(self, s, i, frame, raw_result, base, opts, colours):
-        """Dust and scratch removal for archive mode; returns cleaned colour planes.
+    def _averaged(self, s, i, frame, passes, kw, base, opts):
+        """Multi-sample for a scanner that reads each line once: whole passes, averaged.
 
-        nkscan only cleans inside a pass, so this takes a second pass with
-        cleaning on, at the first pass's exact exposure and lens position so
-        the two match. Swap this function for another cleaner (for example
-        Nikon's Digital ICE) that works from the raw RGB and infrared instead.
+        Every pass after the first uses the first one's exposure and lens position.
+        A pass that does not land on the first within half a pixel is left out.
         """
+        kw = dict(kw, clean=False)
+        first = s.scan_frame(frame, **kw, **base, **opts)
+        names = list(first.colors)
+        key = "green" if "green" in first.colors else names[0]
+        total = {k: first.colors[k].astype(np.uint32) for k in names}
+        ir_total = first.ir.astype(np.uint32) if first.ir is not None else None
+        again = dict(opts)
+        again["exposures"] = dict(first.exposures)
+        pos = first.focus_position
+        again["focus"] = int(pos) if pos is not None else "hold"
+        used = 1
+        for k in range(1, passes):
+            if self.cancel:
+                raise Cancelled
+            self.say(f"frame {i + 1}: pass {k + 1} of {passes} (same focus and exposure)")
+            r = s.scan_frame(frame, **kw, **base, **again)
+            if r.colors[key].shape != first.colors[key].shape or (ir_total is not None and r.ir is None):
+                self.say(f"frame {i + 1}: pass {k + 1} came back a different size, left out")
+                continue
+            off = pass_shift(first.colors[key], r.colors[key])
+            if off is not None and off > 0.5:
+                self.say(f"frame {i + 1}: pass {k + 1} sits {off:.1f} pixel off the first, left out")
+                continue
+            for name in names:
+                total[name] += r.colors[name]
+            if ir_total is not None:
+                ir_total += r.ir
+            used += 1
+            self.say(f"frame {i + 1}: pass {k + 1} lines up"
+                     + (f" within {off:.2f} pixel" if off is not None else " (too little detail to measure)"))
+
+        def mean(v):
+            return ((v + used // 2) // used).astype(np.uint16)
+
+        self.say(f"frame {i + 1}: averaged {used} passes")
+        return types.SimpleNamespace(
+            colors={k: mean(v) for k, v in total.items()}, ir=mean(ir_total) if ir_total is not None else None,
+            dpi=first.dpi, rows=getattr(first, "rows", None), cols=getattr(first, "cols", None),
+            exposures=first.exposures, complete=first.complete, cleaned=None,
+            focused=first.focused, focus_position=first.focus_position)
+
+    def clean_planes(self, planes, ir, dpi, i):
+        """Dust and scratch removal on a finished pass, as scanned. Returns the cleaned planes.
+
+        The built-in method is nkscan's, run here on the scan in memory, so the
+        untouched scan can be kept as well. The Nikon ICE helper is used instead
+        when it is there and chosen.
+        """
+        if ir is None or len(planes) != 3:
+            self.say(f"frame {i + 1}: dust removal needs red, green, blue and infrared; left as scanned")
+            return planes
+        if self._dust_method() == "ice":
+            try:
+                return self._ice_clean(planes, ir, dpi, i)
+            except Exception as e:  # noqa: BLE001 - any trouble with the helper: carry on without it
+                reason = "it took too long" if type(e).__name__ == "TimeoutExpired" else str(e)
+                self.say(f"frame {i + 1}: the Nikon ICE helper failed ({reason}); using the built-in dust removal")
+        started = time.time()
+        try:
+            result = dust_clean(planes, ir, dpi, negative=self._film() in ("negative", "mono"),
+                                progress=self._progress)
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 - never lose the picture over the cleaning
+            traceback.print_exc()
+            self.say(f"frame {i + 1}: WARNING, dust removal failed ({type(e).__name__}: {e}); "
+                     f"this picture is saved as scanned, with the dust still on it")
+            return planes
+        if result is None:
+            self.say(f"frame {i + 1}: no clear film to measure the infrared against; dust removal skipped")
+            return planes
+        cleaned, count = result
+        self.say(f"frame {i + 1}: dust removal rebuilt {count} pixels in {time.time() - started:.0f} s")
+        return cleaned
+
+    def _ice_clean(self, planes, ir, dpi, i):
+        import tempfile
+        self.say(f"frame {i + 1}: dust removal by the Nikon ICE helper")
+        started = time.time()
+        with tempfile.TemporaryDirectory(prefix="coolscan-ice-") as tmp:
+            src, dst = Path(tmp) / "input.tif", Path(tmp) / "output.tif"
+            write_tiff(src, list(planes) + [ir], dpi)
+            product = (getattr(self.caps, "product", None) or "").strip()
+            run = subprocess.run(self._ice_cmd() + [str(src), str(dst), "--film", self._film(),
+                                  "--dpi", str(int(dpi)), "--model", product],
+                                 capture_output=True, text=True, timeout=ICE_TIMEOUT)
+            if run.returncode != 0:
+                lines = (run.stderr or run.stdout or "").strip().splitlines()
+                raise RuntimeError(lines[-1][:200] if lines else f"exit code {run.returncode}")
+            cleaned = read_tiff_rgb16(dst)
+        if cleaned[0].shape != planes[0].shape:
+            raise RuntimeError("its picture has a different size")
+        self.say(f"frame {i + 1}: Nikon ICE finished in {time.time() - started:.0f} s")
+        return cleaned
+
+    def second_pass(self, s, i, frame, raw_result, base, opts, as_scanned):
+        """The old way to clean in archive mode: scan again with the driver's cleaning on,
+        at the first pass's exact exposure and lens position. Slower; kept as a fallback."""
         self.say(f"frame {i + 1}: second pass with dust removal (same focus and exposure)")
         again = dict(opts)
         again["exposures"] = dict(raw_result.exposures)
@@ -1468,7 +2420,7 @@ class App:
         r = s.scan_frame(frame, infrared=True, clean=True, **base, **again)
         if r.cleaned is not None:
             self.say(f"dust removal rebuilt {r.cleaned} pixels")
-        return colours(r)
+        return as_scanned(r)
 
 
 # ---------------------------------------------------------------- web page
@@ -1490,6 +2442,8 @@ select,input[type=number],input[type=text]{width:150px;padding:4px;background:va
 button{padding:6px 10px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer;margin:3px 3px 3px 0}
 button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}button:disabled{opacity:.45;cursor:default}
 .hint{color:var(--mute);font-size:12px;margin:4px 0;overflow-wrap:anywhere}
+textarea{display:block;width:100%;min-height:64px;padding:6px;margin:4px 0;resize:vertical;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;font:inherit}
+#rollno{width:64px}.warn{color:var(--warn)}
 #thumbwrap{position:relative;overflow-x:auto}#thumbwrap .inner{position:relative;display:inline-block}
 #thumb{display:block;max-width:none;height:160px}
 .box{position:absolute;border:2px solid var(--acc);color:#fff;font-size:11px;cursor:pointer}
@@ -1533,6 +2487,12 @@ body.picking .frame img{cursor:crosshair}
 </section>
 <section><h2>Roll</h2>
 <div id="rollname" style="font-weight:600"></div><div class="hint" id="rollfilm"></div>
+<label>Roll number<span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
+<div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
+<button class="primary" id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div>
+<div>Film description</div>
+<textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
+<p class="hint" id="rolldeschint">Saved as Description.txt in the roll folder, and updated whenever you change it.</p>
 <button id="b-newroll">New roll…</button>
 <div id="rolldlg" hidden style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
 <p class="hint">Start a new folder for the next roll? Film details are optional; they name the folder and go into the files.</p>
@@ -1540,24 +2500,38 @@ body.picking .frame img{cursor:crosshair}
 <label>Film<input type="text" id="r-film_stock" placeholder="e.g. Portra"></label>
 <label>ISO<input type="text" id="r-film_iso" placeholder="e.g. 400"></label>
 <label>Notes<input type="text" id="r-film_notes" placeholder="e.g. Summer 2005"></label>
+<div>Film description</div>
+<textarea id="r-film_description" placeholder="Optional. Saved as Description.txt in the new roll's folder."></textarea>
 <button class="primary" id="b-rollok">Start new roll</button><button id="b-rollcancel">Cancel</button>
 </div></section>
+<section><h2>When a strip is done</h2>
+<label>iMessage to<input type="text" id="s-notify_imessage" placeholder="your number or Apple ID"></label>
+<label>Banner on this Mac<input type="checkbox" id="s-notify_mac"></label>
+<label>ntfy topic<input type="text" id="s-notify_ntfy" placeholder="optional"></label>
+<p class="hint">Sends a message when a batch finishes or stops on an error. The iMessage goes out through this Mac's Messages app; the first time, macOS asks you to allow it. ntfy is a free phone app, if you prefer that.</p>
+<button id="b-notifytest">Send a test</button>
+</section>
 <section><h2>Scan</h2>
 <label>Resolution (dpi)<select id="s-dpi"></select></label>
 <label>Multi-sample<select id="s-samples"></select></label>
+<p class="hint" id="mshint"></p>
 <label>Save infrared<input type="checkbox" id="s-ir"></label>
 <label>Dust &amp; scratch removal<input type="checkbox" id="s-clean"></label>
+<label id="dustrow">Dust removal by<select id="s-dust_method"><option value="builtin">Built in (one pass)</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver, second pass (slow)</option></select></label>
+<label>Grain reduction<select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
+<label>Restore faded colours<select id="s-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
 <label>Archive mode<input type="checkbox" id="s-archive"></label>
-<p class="hint" id="archint">Archive mode saves two folders: RAW (untouched scan with infrared as a 4th channel) and Positive (finished picture, dust removed if ticked).</p>
+<p class="hint" id="archint">Archive mode saves two folders from one pass: RAW (untouched scan with infrared as a 4th channel) and Positive (finished picture, dust removed if ticked).</p>
 <label id="negrow">Negatives saved as<select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label>Folder<input type="text" id="s-outdir"></label>
 <label>Negative tone<select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label>Colour space<select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
-<label>File name prefix<input type="text" id="s-basename"></label>
+<label>File name prefix<input type="text" id="s-basename" placeholder="optional"></label>
 <label>Suffix<input type="text" id="s-suffix"></label>
 <label>Roll number in name<select id="s-roll_tag"><option value="overall">Overall roll (_R017)</option><option value="day">Roll of the day (_R02)</option><option value="date_day">Date + roll of the day (_20261122_R02)</option><option value="none">None</option></select></label>
 <label>Counter digits<input type="number" id="s-digits" min="1" max="6"></label>
-<label>Start number<input type="number" id="s-start" min="0"></label>
+<label>Next number<input type="number" id="s-start" min="1"></label>
+<p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
 <label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
 <p class="hint">Galleries sort the scans by this date instead of today's. The real scan date stays in the file's description. Leave empty to use today.</p>
 <p class="hint" id="nameex"></p>
@@ -1576,7 +2550,7 @@ let S=null, sel=new Set(), lastV=-1, stamp=Date.now();
 const $=id=>document.getElementById(id);
 async function api(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return r.json()}
 function selList(){return [...sel].sort((a,b)=>a-b)}
-const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','suffix','digits','start','photo_date','colour_space','roll_tag','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail'];
+const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','suffix','digits','start','photo_date','colour_space','roll_tag','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail','dust_method','grain','restore','notify_mac','notify_imessage','notify_ntfy'];
 let picking=false;
 keys.forEach(k=>{const e=$('s-'+k);e.addEventListener('change',()=>{const v=e.type=='checkbox'?e.checked:e.value;api('/api/settings',{[k]:v})})});
 $('b-fpoint').onclick=()=>{if(S.settings.focus_point){api('/api/settings',{focus_point:null});return}picking=!picking;document.body.classList.toggle('picking',picking);$('fpoint').textContent=picking?'click a preview…':'centre'};
@@ -1584,10 +2558,25 @@ $('b-connect').onclick=()=>api('/api/connect');$('b-load').onclick=()=>api('/api
 $('b-thumb').onclick=()=>{sel.clear();api('/api/thumbnail')};$('b-preview').onclick=()=>api('/api/preview',{frames:selList()});
 $('b-cal').onclick=()=>api('/api/calibrate',{frame:selList()[0]??0});$('b-af').onclick=()=>api('/api/autofocus',{frame:selList()[0]??0});
 $('b-ae').onclick=()=>api('/api/autoexpose',{frame:selList()[0]??0});$('b-unlock').onclick=()=>api('/api/unlock');
-$('b-newroll').onclick=()=>{['film_brand','film_stock','film_iso','film_notes'].forEach(k=>$('r-'+k).value='');$('rolldlg').hidden=false;$('b-newroll').hidden=true;$('r-film_brand').focus()};
+const rollKeys=['film_brand','film_stock','film_iso','film_notes','film_description'];
+let descHold=0;
+$('rolldesc').addEventListener('change',()=>{descHold=Date.now()+1500;api('/api/describe',{text:$('rolldesc').value})});
+function rollnoDone(){$('rollnodlg').hidden=true;$('b-rollnoyes').hidden=true}
+async function rollno(move){const n=+$('rollno').value;const r=await api('/api/rollnumber',{number:n,move_aside:move});
+ if(r.ok){rollnoDone();return}
+ $('rollnodlg').hidden=false;$('b-rollnoyes').hidden=!r.in_the_way;
+ if(r.in_the_way)$('b-rollnoyes').textContent=r.in_the_way.length>1?'Move them and renumber':'Move it and renumber';
+ if(r.busy)$('rollnomsg').textContent='Wait until the scan finishes, then try again.';
+ else if(r.in_the_way){const pad=String(n).padStart(3,'0');
+  $('rollnomsg').textContent='Nothing was changed yet. To count on from Roll '+pad+', '+(r.in_the_way.length>1?'these older folders':'this older folder')+' would be moved into "'+r.aside+'" (nothing is deleted or renamed inside): '+r.in_the_way.map(d=>d.name+' ('+d.files+' file'+(d.files==1?'':'s')+')').join(', ')+'.'}
+ else $('rollnomsg').textContent=r.error||'That did not work.'}
+$('b-rollno').onclick=()=>rollno(false);$('b-rollnoyes').onclick=()=>rollno(true);
+$('b-rollnono').onclick=()=>{rollnoDone();$('rollno').value=S.roll_number||''};
+$('b-newroll').onclick=()=>{rollKeys.forEach(k=>$('r-'+k).value='');$('rolldlg').hidden=false;$('b-newroll').hidden=true;$('r-film_brand').focus()};
 $('b-rollcancel').onclick=()=>{$('rolldlg').hidden=true;$('b-newroll').hidden=false};
-$('b-rollok').onclick=async()=>{const b={};['film_brand','film_stock','film_iso','film_notes'].forEach(k=>b[k]=$('r-'+k).value);
+$('b-rollok').onclick=async()=>{const b={};rollKeys.forEach(k=>b[k]=$('r-'+k).value);
  const r=await api('/api/newroll',b);if(r.busy){$('rollfilm').textContent='Wait until the scan finishes, then try again.';return}$('rolldlg').hidden=true;$('b-newroll').hidden=false};
+$('b-notifytest').onclick=()=>api('/api/notifytest');
 $('b-scan').onclick=()=>api('/api/scan',{frames:selList()});$('b-stop').onclick=()=>api('/api/stop');
 let anchor=null;
 function toggle(i,ev){ev=ev||{};
@@ -1604,19 +2593,23 @@ function fillSelect(id,vals,cur,lab){const e=$(id);const want=vals.map(String).j
 function render(force){
  if(!S)return; const st=S.settings, c=S.caps, busy=!!S.job;
  $('status').title=c&&c.revision?'Firmware '+c.revision:'';$('status').textContent=(S.demo?'DEMO · ':'')+(c?(c.product+' · '+c.optical_dpi+' dpi'+(c.holder?' · '+c.holder:'')+(S.film_in===false?' · no film':'')):'not connected')+(busy?' · '+S.job+'…':'');
- keys.forEach(k=>{const e=$('s-'+k);if(document.activeElement===e)return;if(e.type=='checkbox')e.checked=!!st[k];else if(!['dpi','preview_dpi','samples','format'].includes(k))e.value=st[k]??''});
+ keys.forEach(k=>{const e=$('s-'+k);if(document.activeElement===e)return;if(e.type=='checkbox')e.checked=!!st[k];else if(k=='start')e.value=S.next_number;else if(!['dpi','preview_dpi','samples','format'].includes(k))e.value=st[k]??''});
  const opt=c?c.optical_dpi:2900, lo=c&&c.x_dpi_range?c.x_dpi_range[0]:73;
  const dpis=[];for(let n=1;n<=40;n++){const d=Math.round(opt/n);if(d>=lo)dpis.push(d)}
  fillSelect('s-dpi',dpis,st.dpi);fillSelect('s-preview_dpi',dpis.filter(d=>d<=1000),st.preview_dpi);
- const ms=c?c.max_samples:16;fillSelect('s-samples',[1,2,4,8,16].filter(n=>n<=ms),st.samples);
+ const ms=c?(c.max_samples||1):1;fillSelect('s-samples',[1,2,4,8,16].filter(n=>n<=Math.max(ms,4)),st.samples,v=>v==1?'Off':(v<=ms?v+'x (one pass)':v+'x ('+v+' passes)'));
+ $('mshint').textContent=st.samples>ms?('Cleaner shadows by averaging '+Math.min(st.samples,4)+' passes. Each frame takes that many times longer.'):'';
  const fmts=c&&c.film_formats?c.film_formats:[];$('fmtrow').hidden=!fmts.length;fillSelect('s-format',[''].concat(fmts),st.format,v=>v||'From holder');
- for(const id of ['b-load','b-eject','b-thumb','b-preview','b-cal','b-af','b-ae','b-unlock','b-scan','b-connect','b-rl','b-rr','b-newroll','b-rollok'])$(id).disabled=busy;$('b-stop').disabled=!busy;
+ for(const id of ['b-load','b-eject','b-thumb','b-preview','b-cal','b-af','b-ae','b-unlock','b-scan','b-connect','b-rl','b-rr','b-newroll','b-rollok','b-rollno','b-rollnoyes'])$(id).disabled=busy;$('b-stop').disabled=!busy;
  if(c&&!c.thumbnail){$('s-preview_mode').value='scan';$('s-preview_mode').disabled=true}else $('s-preview_mode').disabled=false;
- $('negrow').hidden=!!st.archive;
+ $('negrow').hidden=!!st.archive;$('dustrow').hidden=!st.clean;
+ const iceopt=$('s-dust_method').querySelector('option[value=ice]');iceopt.hidden=iceopt.disabled=!S.ice_helper;
  const nf=S.frames.length, ns=sel.size;
  $('b-scan').textContent=ns?`Scan ${ns} selected frame${ns>1?'s':''}`:(nf?`Scan all ${nf} frame${nf>1?'s':''}`:'Scan all frames');
  $('b-preview').textContent=ns?`Preview ${ns} selected`:'Preview all';
  $('rollname').textContent=st.roll||'';$('rollfilm').textContent=(S.film_text?('Film: '+S.film_text):'No film details')+' · saving in '+(S.roll_path||'')+(st.archive?' (RAW/ and Positive/)':'');
+ if(document.activeElement!==$('rollno')&&$('rollnodlg').hidden)$('rollno').value=S.roll_number||'';
+ const dsc=$('rolldesc');if(document.activeElement!==dsc&&Date.now()>descHold)dsc.value=st.film_description||'';
  $('nameex').textContent='Sample: '+(st.archive?'RAW/ and Positive/':'')+S.sample_name;
  const fl=S.focus_lock, el=S.exposure_lock, af=!c||c.autofocus;
  $('b-af').hidden=!af;$('posrow').hidden=st.focus_mode!=='manual';
@@ -1719,6 +2712,16 @@ def make_handler(app):
                     return self._send({"ok": False, "busy": True})
                 app.new_roll(body)
                 return self._send({"ok": True})
+            if path == "/api/describe":
+                app.describe(body.get("text", ""))
+                return self._send({"ok": True})
+            if path == "/api/rollnumber":
+                return self._send(app.quick_job("renumbering", lambda: app.renumber_roll(
+                    body.get("number"), bool(body.get("move_aside")))))
+            if path == "/api/notifytest":
+                if not app.notify("Test message. This is how you will hear that a strip is done."):
+                    app.say("nothing to send to yet: fill in a number or Apple ID, or tick the banner")
+                return self._send({"ok": True})
             if path == "/api/unlock":
                 app.focus_lock = app.exposure_lock = None
                 app.settings.update(focus_mode="frame", exposure_mode="auto")
@@ -1727,6 +2730,8 @@ def make_handler(app):
                 return self._send({"ok": True})
             if path == "/api/settings":
                 for k, v in body.items():
+                    if k in ("roll", "film_description"):
+                        continue  # these have their own buttons, which also look after the folder
                     if k in app.settings:
                         old = app.settings[k]
                         if isinstance(old, bool):
@@ -1738,7 +2743,7 @@ def make_handler(app):
                 if "focus_point" in body:
                     app.focus_lock = None  # like Nikon Scan: a new focus point means focus again
                     app.frame_focus = {}
-                if ("rotate180" in body or "invert_preview" in body or "tone" in body) and not app.job:
+                if ("rotate180" in body or "invert_preview" in body or "tone" in body or "restore" in body) and not app.job:
                     app.redraw()
                 with app.lock:
                     app.version += 1
@@ -1766,6 +2771,7 @@ def main():
     if not args.demo:
         app.load_settings()
     app.roll_dir()
+    app.read_description()
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
     except OSError:
@@ -1774,6 +2780,7 @@ def main():
     url = f"http://127.0.0.1:{args.port}"
     print(f"Coolscan is running at {url}  (Ctrl-C to quit)")
     app.run_job("connect", app.connect)
+    threading.Thread(target=app.check_ice, daemon=True).start()
     threading.Thread(target=app.watch, daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, (url,)).start()

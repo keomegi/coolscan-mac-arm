@@ -47,21 +47,40 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   ⌘-click adds or removes one, Shift-click selects a range.
 - **Scan all frames** (batch scan): scans every frame on the strip, one after the other, into the
   roll folder with continuing numbers. Select frames first and the button becomes
-  "Scan N selected frames" and scans only those. Full scans are saved as 16-bit TIFF with Nikon's colour profile, plus
-  `_IR.tiff` when "Save infrared" is on. "Dust & scratch removal" uses nkscan's infrared cleaning.
+  "Scan N selected frames" and scans only those. Full scans are saved as 16-bit TIFF, plus
+  `_IR.tif` when "Save infrared" is on.
+- **Dust & scratch removal**: uses the infrared channel to find dust and scratches and rebuilds
+  the picture under them. The method is nkscan's. "Dust removal by" picks where it runs:
+  *Built in (one pass)* cleans the scan in the app, *Driver, second pass* is the older, slower
+  way. A third choice, *Nikon ICE (helper)*, only shows when a working `ice_clean` helper sits
+  next to `coolscan.py`; on this Mac it does not, so the choice is hidden.
+- **Grain reduction** (off by default, levels 1 to 4): smooths film grain and keeps edges and
+  texture, like Nikon's GEM. Our own method, not Nikon's.
+- **Restore faded colours** (off by default; low, medium, high): lines up the three colours of a
+  faded negative or slide again and strengthens them, like Nikon's ROC. Our own method. A picture
+  that really is one colour all over (a sunset) loses some of it, so start low.
+- **Multi-sample**: cleaner shadows. If the scanner can read each line several times, that is
+  used ("one pass"). If it reads each line once, 2x and 4x scan the frame that many times at the
+  same focus and exposure and average the passes; a pass that lands more than half a pixel off
+  is left out. The Activity list says which kind your scanner is when it connects.
 
 - **Negatives saved as**: Positive (default, like Nikon Scan), Negative (raw) or Both.
 - **Archive mode**: saves two folders in the target folder. `RAW/` holds the untouched scan with
   the infrared as a 4th channel (RGBI, like SilverFast's archive files). `Positive/` holds the
-  finished picture, inverted if it is a negative, with dust removed if ticked. Dust removal in
-  archive mode takes a second pass at the same focus and exposure.
-- **File names** follow Nikon Scan: prefix + 3-digit counter + suffix, e.g. `Scan001.tif`.
-  Prefix, suffix, number of digits and start number can be changed.
+  finished picture, inverted if it is a negative, with dust removed if ticked. Both come from
+  one pass, so a frame takes about half as long as it did with two passes.
+- **File names**: prefix + `_` + 3-digit counter + suffix + roll number, e.g. `Scan_001_R002.tif`.
+  The prefix is optional: leave it empty and the name is `001_R002.tif`. The `_` belongs to the
+  prefix, so there is none without it.
+- **Next number**: shows the number the next scan gets. It counts on by itself from the pictures
+  already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
+  another number to carry on from there; it is used for the next batch, then the roll counts on
+  by itself again. A name that is already taken is skipped. Nothing is ever overwritten.
 - **Negative tone**: "Flat" (default) keeps the plain conversion, lighter and lower in contrast,
   as a starting point for editing (for example Lightroom's Auto). "Nikon Scan look" gives
   negatives the same brightness and contrast as Nikon Scan, measured on five frames scanned in
   both programs.
-- **Roll number in name**: file names end with the roll number, e.g. `Scan001_R002.tif`.
+- **Roll number in name**: file names end with the roll number, e.g. `Scan_001_R002.tif`.
 - **Colour space**: finished pictures are saved in ProPhoto RGB by default, converted through
   Nikon's LS-40 profile, with the ProPhoto profile embedded. Also Adobe RGB (1998), sRGB,
   Apple RGB, ColorMatch, Bruce, Wide Gamut, or Scanner RGB (Nikon's profile, no conversion).
@@ -74,6 +93,20 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   is named from them, e.g. `Roll 002 - Kodak Portra ISO 400`, numbering starts again at 001,
   and the film details are written into each file (description and EXIF ISO). The current roll
   and settings are remembered between runs (in `~/.coolscan.json`).
+- **Roll number**: type another number and press Change to renumber the roll you are scanning.
+  Its folder is renamed and so is the `_R…` part of its files. If older roll folders already
+  use that number or a higher one, nothing happens until you agree: then they are moved, whole
+  and untouched, into a folder called `Earlier rolls`. Nothing is deleted or overwritten, and
+  it cannot be done while a scan is running.
+- **Film description**: free text about the roll (camera, place, dates). It is saved as
+  `Description.txt` in the roll folder and updated whenever you change it, also during a scan.
+  New roll… has the same box. If you edit the file by hand, the app picks that up when it starts.
+- **When a strip is done**: sends a message when a batch finishes or stops on an error, with
+  the number of frames saved and the roll. Fill in your own number or Apple ID for an iMessage
+  (sent through this Mac's Messages app; macOS asks once for permission), tick the banner for a
+  notification on the Mac, or give an ntfy topic for the free ntfy phone app. "Send a test"
+  tries it. For ntfy, which goes through a server on the internet, only the roll number is
+  sent, not your film notes.
 - **Photo taken**: type a year (or year-month-day) and the files get that as their EXIF
   "date taken", so Apple Photos, Lightroom and Google Photos sort them by it. The real scan date
   stays in the file's description.
@@ -106,10 +139,24 @@ brackets (send that part along if you report a problem).
 
 ## Tested so far
 
-Thumbnail, preview, scanning, Archive mode and saving have run on the LS-40 on the Mac
-(2026-11-22), and five frames were compared with Nikon Scan's own scans. Features added after
-that (rolls, roll number in names, Nikon tone, photo date, ProPhoto as default) are tested with the pretend scanner
-(`--demo`) and on the saved scan files only.
+Thumbnail, preview, scanning, Archive mode (then with two passes) and saving have run on the
+LS-40 on the Mac (2026-11-22), and five frames were compared with Nikon Scan's own scans.
+Features added after that (rolls, roll number in names, Nikon tone, photo date, ProPhoto as
+default) are tested with the pretend scanner (`--demo`) and on the saved scan files only.
+
+Added on 2026-11-22 in the evening, none of it run on the scanner yet:
+
+- Built-in dust removal and one-pass Archive mode: run on the five real RAW scans from the
+  Mac and compared with nkscan's own cleaner on the same files. Same pixels rebuilt, about
+  95% of them identical to the last digit, the rest within rounding.
+- Grain reduction and colour restoration: tried on one real scan and on a copy of it faded on
+  purpose. Not compared with Nikon's GEM and ROC.
+- Multi-sample by averaging passes: pretend scanner only. Earlier scans of the same frames
+  landed within about 0.1 to 0.4 pixel of each other, which is why it should work.
+- Messages: the iMessage and the banner run through macOS and could only be tested with a
+  stand-in, so use "Send a test" first. ntfy was tested against a local stand-in server.
+- Roll number change, film description, optional prefix and the next number: pretend scanner
+  and a browser, with real folders and files.
 
 The error help, the film-moved check, the thumbnail when film goes in, carrying on after a
 failed frame, eject when done and the scan log are tested with the pretend scanner only, with failures made up to look like nkscan's.
