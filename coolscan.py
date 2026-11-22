@@ -53,6 +53,7 @@ DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll
 ASIDE_FOLDER = "Earlier rolls"          # where older roll folders go when their number is taken over
 _NAME_END = re.compile(r"(?:_IR|_negative)?\.tiff?$", re.I)   # how a saved picture's name ends
 _NAME_ROLL = re.compile(r"(?:_\d{8})?_R\d{2,3}$")              # the roll number before that, if any
+DRIVER_LOG = Path.home() / ".coolscan-driver.log"   # the driver's own notes on each pass, started fresh each run
 SETTINGS_FILE = Path.home() / ".coolscan.json"  # settings and the current roll, kept between runs  # pixels; previews are shrunk to this for the browser
 
 
@@ -866,18 +867,28 @@ def send_banner(title, text):
                title, text)
 
 
-def send_imessage(recipient, text):
-    """An iMessage from the Mac's Messages app, for example to the person's own phone."""
-    script = ["on run argv", 'tell application "Messages"',
-              "set theAccount to 1st account whose service type = iMessage",
-              "send (item 2 of argv) to participant (item 1 of argv) of theAccount", "end tell", "end run"]
+def send_shortcut(name, text):
+    """Run one of the person's own shortcuts (the Shortcuts app on this Mac), with the message as its input."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="coolscan-msg-") as tmp:
+        note = Path(tmp) / "Coolscan message.txt"
+        note.write_text(text, encoding="utf-8")
+        run = subprocess.run(["shortcuts", "run", name, "--input-path", str(note)],
+                             capture_output=True, text=True, timeout=120)
+    if run.returncode != 0:
+        lines = (run.stderr or run.stdout or "").strip().splitlines()
+        raise RuntimeError(lines[-1][:200] if lines else f"shortcuts ended with code {run.returncode}")
+
+
+def list_shortcuts():
+    """The names of the person's shortcuts, for the list under the field. Empty when this is not a Mac."""
     try:
-        _osascript(script, recipient, text)
-    except RuntimeError:
-        # the wording older versions of Messages understand
-        script[2] = "set theAccount to 1st service whose service type = iMessage"
-        script[3] = "send (item 2 of argv) to buddy (item 1 of argv) of theAccount"
-        _osascript(script, recipient, text)
+        run = subprocess.run(["shortcuts", "list"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if run.returncode != 0:
+        return []
+    return sorted({line.strip() for line in run.stdout.splitlines() if line.strip()}, key=str.lower)
 
 
 def send_ntfy(topic, title, text):
@@ -887,6 +898,54 @@ def send_ntfy(topic, title, text):
     req = urllib.request.Request(url, data=text.encode("utf-8"), headers={"Title": title}, method="POST")
     with urllib.request.urlopen(req, timeout=15) as reply:
         reply.read()
+
+
+# ---------------------------------------------------------------- what the driver noted about a pass
+#
+# While a pass runs, the scanner streams the picture and the computer has to keep
+# taking it. If the computer stops asking, the scanner's own memory fills and its
+# stage has to stop and start again. nkscan measures that time ("starved") and
+# writes it in its log after every pass, so the app can say whether it happened.
+
+class DriverLog:
+    def __init__(self):
+        self.path, self.at = None, 0
+
+    def start(self):
+        """Ask nkscan to write its notes on each pass into a small file. Quietly does nothing if it cannot."""
+        try:
+            import nkscan
+            DRIVER_LOG.write_text("")
+            nkscan.init_logging("warn,nkscan::session::scan=debug", str(DRIVER_LOG))
+            self.path = DRIVER_LOG
+        except Exception:  # noqa: BLE001 - the log is an extra; scanning works without it
+            self.path = None
+        return self.path is not None
+
+    def mark(self):
+        try:
+            self.at = self.path.stat().st_size if self.path else 0
+        except OSError:
+            self.at = 0
+
+    def passes(self):
+        """What was written since mark(): one dict per pass (read_ms, starved_ms, bytes, chunks, ...)."""
+        if not self.path:
+            return []
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.at)
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            return []
+        return [{k: int(v) for k, v in re.findall(r"\b(\w+_ms|bytes|chunks)=(\d+)", line)}
+                for line in text.splitlines() if "starved_ms=" in line]
+
+
+def clock(seconds):
+    """Seconds as m:ss, e.g. 1:07."""
+    seconds = int(round(max(0, seconds)))
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 # ---------------------------------------------------------------- a cleaning helper (Nikon ICE)
@@ -963,6 +1022,8 @@ class _Demo:
         self.loaded = True
         self.focus = 250
         self.medium_changes = 0  # like nkscan: counts a strip or holder going in or out
+        self.strip_frames = 6    # how many frames the strip in the scanner has
+        self.focus_moves = 0     # how often a pass asked for the lens to be moved
 
     @property
     def capabilities(self):
@@ -988,6 +1049,7 @@ class _Demo:
     def load(self):
         if not self.loaded:
             self.medium_changes += 1
+            self.strip_frames = 4 if self.strip_frames == 6 else 6  # the next strip is another length
         self.loaded = True
         return True
 
@@ -1005,7 +1067,7 @@ class _Demo:
         d.thumbnail = self._film(rows, cols, 1)
         d.column_addresses = [i * 100 for i in range(cols)]
         d.row_addresses = [rows * 10 - i * 10 for i in range(rows)]
-        d.frames = [(i * 14000 + 600, 50, i * 14000 + 13400, 900) for i in range(6)]
+        d.frames = [(i * 14000 + 600, 50, i * 14000 + 13400, 900) for i in range(self.strip_frames)]
         d.base_density = (0.2, 0.5, 0.8)
         d.thumbnail_complete = True
         return d
@@ -1019,11 +1081,18 @@ class _Demo:
 
     def focus_frame(self, frame, focus=None):
         time.sleep(0.5)
+        self.focus = 240 + (frame[0] // 14000) * 3  # each frame focuses a little differently
         return "focused", self.focus
+
+    def focus_position(self):
+        return self.focus
 
     def scan_frame(self, frame, dpi=None, infrared=False, clean=False, exposures=None,
                    focus=None, progress=None, **kw):
         dpi = dpi or 2900
+        if isinstance(focus, int) and not isinstance(focus, bool):
+            self.focus_moves += 1
+            self.focus = focus
         self._wait(progress, "scan", 10 if dpi < 1000 else 30)
         r = self.Result()
         rows, cols = int(0.94 * dpi), int(1.42 * dpi)
@@ -1174,6 +1243,10 @@ class App:
         self.job = None
         self.progress = None
         self.cancel = False
+        self.driver_log = DriverLog()
+        self.frame_times = {}  # seconds spent on the frame being scanned: scan, clean, waited (see _driver_scan)
+        self.timing = {}       # for the screen: when the strip and the frame started, how long the last ones took
+        self.strip_id = 0      # goes up whenever the frames on screen are from another strip
         self.batch_day = None  # the date in the file names of the batch being scanned
         self.last_taken = None  # the "date taken" given to the last frame
         self.version = 0
@@ -1183,13 +1256,14 @@ class App:
             "focus_mode": "frame", "focus_point": None, "focus_position": 0,
             "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
             "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
-            "basename": "Scan", "suffix": "", "digits": 3, "start": 0, "archive": False, "photo_date": "",
-            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 4,
+            "basename": "", "digits": 3, "start": 0, "archive": False, "photo_date": "",
+            "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 5,
             "stop_on_errors": False, "scan_log": True, "eject_after": False, "auto_thumbnail": True,
             "dust_method": "builtin", "grain": 0, "restore": 0,
-            "notify_mac": False, "notify_imessage": "", "notify_ntfy": "",
-            "roll": "", "roll_tag": "overall", "name_date": True, "roll_day": "", "roll_day_count": 1, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
+            "notify_mac": False, "notify_shortcut": "", "notify_ntfy": "",
+            "roll": "", "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
             "film_description": "",
+            "rolls": {},   # roll folder name -> its film details, so going back to a roll brings them back
         }
 
     # -- bookkeeping
@@ -1202,9 +1276,9 @@ class App:
             self.version += 1
 
     def _progress(self, phase, pass_number, done, total):
-        with self.lock:
-            self.progress = {"phase": phase, "done": done, "total": total}
-            self.version += 1
+        # Called by the driver between the pieces of a pass, so it has to be quick:
+        # anything slow here keeps the scanner waiting. The page reads this on its own.
+        self.progress = {"phase": phase, "done": done, "total": total}
         return not self.cancel
 
     def state(self):
@@ -1243,7 +1317,8 @@ class App:
             "film_text": self._film_text(), "roll_number": self._roll_number(self.settings["roll"] or ""),
             "sample_name": self._stem(None, number) + ".tif", "next_number": number,
             "film_in": self.film_in if self.settings["auto_thumbnail"] else None,
-            "ice_helper": self.ice_ready,
+            "ice_helper": self.ice_ready, "strip": self.strip_id,
+            "rolls": self.rolls(), "timing": dict(self.timing, now=time.time()),
         }
 
     def run_job(self, name, fn, *args):
@@ -1276,6 +1351,7 @@ class App:
         """The scanner went away (switched off, unplugged, reset): the next button press connects again."""
         self.session, self.caps = None, None
         self.discovery, self.thumb_png, self.film_in = None, None, None
+        self.strip_id += 1
         self.say("the next button you press (or Connect) connects to the scanner again")
 
     def _ice_cmd(self):
@@ -1303,9 +1379,9 @@ class App:
         ways = []
         if st["notify_mac"]:
             ways.append(("banner on this Mac", lambda: send_banner("Coolscan", text)))
-        if st["notify_imessage"].strip():
-            ways.append((f"iMessage to {st['notify_imessage'].strip()}",
-                         lambda: send_imessage(st["notify_imessage"].strip(), "Coolscan: " + text)))
+        shortcut = st["notify_shortcut"].strip()
+        if shortcut:
+            ways.append((f'shortcut "{shortcut}"', lambda: send_shortcut(shortcut, "Coolscan: " + text)))
         if st["notify_ntfy"].strip():
             ways.append(("ntfy", lambda: send_ntfy(st["notify_ntfy"], "Coolscan", plain or text)))
 
@@ -1421,6 +1497,7 @@ class App:
         self.discovery, self.thumb_png, self.medium_seen = None, None, None
         self.previews, self.preview_info = {}, {}
         self.film_in, self.film_armed = None, True
+        self.strip_id += 1
 
     def refresh_caps(self):
         """Copy the capabilities. Only call this on the worker thread."""
@@ -1453,6 +1530,7 @@ class App:
         self.refresh_caps()
         self.discovery, self.thumb_png, self.previews, self.preview_info = None, None, {}, {}
         self.film_armed = True
+        self.strip_id += 1
 
     def eject(self):
         s = self.need_session()
@@ -1462,6 +1540,7 @@ class App:
         self.discovery, self.thumb_png, self.previews, self.preview_info = None, None, {}, {}
         self.preview_raw, self.frame_rot, self.frame_focus = {}, {}, {}
         self.focus_lock = self.exposure_lock = None
+        self.strip_id += 1
         # do not take the same strip straight back in: wait until the scanner says it is out
         self.film_armed = False
 
@@ -1529,6 +1608,7 @@ class App:
         self.say(f"thumbnail pass: finding the frames ({self._holder_name()})")
         d = s.discover_frames(format=self._format(), film=self._film(), progress=self._progress)
         self.discovery = d
+        self.strip_id += 1
         self.medium_seen = self._medium(s)
         self.previews, self.preview_info, self.preview_raw, self.frame_rot = {}, {}, {}, {}
         self.frame_focus = {}  # new film (or a new look at it): focus each frame again
@@ -1627,6 +1707,28 @@ class App:
             return self.frame_focus[i]
         return self._point() or "auto"
 
+    def _driver_scan(self, s, frame, **kw):
+        """One scan_frame call. Leaves the lens alone when it is already where the pass wants it
+        (nkscan: "to scan at this focus, give the scan hold"), and keeps the time it took and
+        what the driver noted about the scanner waiting for the computer."""
+        focus = kw.get("focus")
+        if isinstance(focus, int) and not isinstance(focus, bool):
+            try:
+                at = s.focus_position
+                if int(at() if callable(at) else at) == focus:
+                    kw["focus"] = "hold"
+            except Exception:  # noqa: BLE001 - an older nkscan, or the scanner cannot say: move as before
+                pass
+        self.driver_log.mark()
+        started = time.time()
+        r = s.scan_frame(frame, **kw)
+        t = self.frame_times
+        t["scan"] = t.get("scan", 0.0) + time.time() - started
+        for p in self.driver_log.passes():
+            t["waited"] = t.get("waited", 0.0) + p.get("starved_ms", 0) / 1000
+            t["passes"] = t.get("passes", 0) + 1
+        return r
+
     def _scan_options(self, s, i, frame, infrared):
         """film, focus, white balance and exposures for a pass."""
         opts = {"film": self._film(), "format": self._format(),
@@ -1671,8 +1773,8 @@ class App:
                     continue
             dpi = int(self.settings["preview_dpi"])
             self.say(f"frame {i + 1}: preview scan at {dpi} dpi")
-            r = s.scan_frame(d.frames[i], dpi=dpi, progress=self._progress,
-                             **self._scan_options(s, i, d.frames[i], False))
+            r = self._driver_scan(s, d.frames[i], dpi=dpi, progress=self._progress,
+                                  **self._scan_options(s, i, d.frames[i], False))
             self.preview_raw[i] = {k: v[::4, ::4] if max(v.shape) > 2 * PREVIEW_MAX_SIDE else v
                                    for k, v in r.colors.items()}
             self.previews[i] = self._png(self.preview_raw[i], i)
@@ -1737,13 +1839,12 @@ class App:
         self.say("calibrated: every preview and scan now uses this focus and exposure")
 
     def _stem(self, folders, n):
-        """The name without ".tif": prefix, scan date, picture number (and suffix), roll number,
-        e.g. Scan_20261122_005_R001. A part that is left out brings no underscore."""
+        """The name without ".tif": prefix, scan date, picture number, roll number, e.g.
+        20261122_005_R001. The prefix and the date are optional and bring their own underscore."""
         st = self.settings
         digits = min(6, max(1, int(st["digits"] or 3)))
         date, roll = self._name_parts()
-        return (self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}"
-                + self._clean_name(st["suffix"]) + ("_" + roll if roll else ""))
+        return self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}" + "_" + roll
 
     @staticmethod
     def _clean_name(text):
@@ -1761,7 +1862,7 @@ class App:
     def _highest_number(self):
         """The highest frame number among the pictures already in this roll, whatever their prefix."""
         st = self.settings
-        prefix, suffix = self._clean_name(st["basename"]), self._clean_name(st["suffix"])
+        prefix = self._clean_name(st["basename"])
         keep = min(6, max(3, int(st["digits"] or 3)))
         highest = 0
         for folder in self._name_folders():
@@ -1774,8 +1875,6 @@ class App:
                 if not end:
                     continue
                 core = _NAME_ROLL.sub("", name[:end.start()])
-                if suffix and core.endswith(suffix):
-                    core = core[:-len(suffix)]
                 rest = core[len(prefix):].lstrip("_- .") if prefix and core.startswith(prefix) else ""
                 if rest.isdigit():
                     highest = max(highest, int(rest))
@@ -1796,18 +1895,12 @@ class App:
         return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
 
     def _name_parts(self):
-        """The scan date that goes before the picture number and the roll number that goes after it
-        ("" for a part that is switched off)."""
+        """The scan date that goes before the picture number ("" when switched off) and the
+        number of the roll being scanned, which always goes after it."""
         st = self.settings
         # the day of the scan; one batch keeps one date even if it runs past midnight
         date = (self.batch_day or time.strftime("%Y%m%d")) if st["name_date"] else ""
-        mode = st["roll_tag"]
-        roll = ""
-        if mode == "overall":
-            roll = f"R{self._roll_number(st['roll'] or '') or 1:03d}"
-        elif mode in ("day", "date_day"):
-            roll = f"R{int(st['roll_day_count'] or 1):02d}"
-        return date, roll
+        return date, f"R{self._roll_number(st['roll'] or '') or 1:03d}"
 
     def _next_number(self, folders, n):
         """n, or the first number after it whose name is still free in every one of the folders."""
@@ -1850,13 +1943,13 @@ class App:
             existing = sorted((d.name for d in base.glob("Roll *") if d.is_dir()),
                               key=self._roll_number) if base.is_dir() else []
             st["roll"] = existing[-1] if existing else "Roll 001"
-            st["roll_day"] = st["roll_day"] or time.strftime("%Y%m%d")
             self.save_settings()
         return self._base() / st["roll"]
 
     def new_roll(self, details):
         """Start a new folder for the next roll. Called only after the person confirms."""
         st = self.settings
+        self._remember_roll()
         for k in ("film_brand", "film_stock", "film_iso", "film_notes"):
             st[k] = str(details.get(k, "")).strip()
         st["film_description"] = self._tidy_text(details.get("film_description", ""))
@@ -1869,14 +1962,55 @@ class App:
             name += " - " + re.sub(r'[\\/:*?"<>|]', "-", film)[:80].strip()
         st["roll"] = name
         st["start"] = 0
-        today = time.strftime("%Y%m%d")
-        st["roll_day_count"] = st["roll_day_count"] + 1 if st["roll_day"] == today else 1
-        st["roll_day"] = today
+        self._remember_roll()
         self.save_settings()
         self.say(f"new roll: saving to {base / name}, numbering starts again")
         self._write_description()
         with self.lock:
             self.version += 1
+
+    # -- going back to an earlier roll
+    _FILM_KEYS = ("film_brand", "film_stock", "film_iso", "film_notes")
+
+    def rolls(self):
+        """Every roll folder in the target folder, lowest number first. The current roll is always in it."""
+        names = set()
+        try:
+            names = {d.name for d in self._base().iterdir() if d.is_dir() and re.match(r"Roll \d+", d.name)}
+        except OSError:
+            pass
+        if self.settings["roll"]:
+            names.add(self.settings["roll"])
+        return sorted(names, key=lambda n: (self._roll_number(n), n))
+
+    def _remember_roll(self):
+        """Keep the current roll's film details, so that going back to it later brings them back."""
+        st = self.settings
+        if st["roll"]:
+            st["rolls"][st["roll"]] = {k: st[k] for k in self._FILM_KEYS}
+
+    def switch_roll(self, name):
+        """Carry on in a roll folder that is already there. Nothing is renamed or moved."""
+        st = self.settings
+        name = str(name or "")
+        if name == st["roll"]:
+            return {"ok": True, "same": True}
+        if not re.match(r"Roll \d+", name) or "/" in name or not (self._base() / name).is_dir():
+            return {"ok": False, "error": "That roll's folder is not there any more."}
+        self._remember_roll()
+        known = st["rolls"].get(name)
+        if not isinstance(known, dict):
+            # a roll from before the app kept these: what its folder name says about the film
+            known = {"film_notes": name.partition(" - ")[2].strip()}
+        for k in self._FILM_KEYS:
+            st[k] = str(known.get(k, "") or "")
+        st["roll"], st["start"], st["film_description"] = name, 0, ""
+        self.read_description()
+        self.save_settings()
+        self.say(f"back in {name}: the next picture gets number {self.next_number()}")
+        with self.lock:
+            self.version += 1
+        return {"ok": True}
 
     # -- film description: free text, kept as a text file in the roll's folder
     @staticmethod
@@ -1998,6 +2132,8 @@ class App:
                     pass
             return {"ok": False, "error": f"Could not rename ({e.strerror}). Nothing was changed."}
         st["roll"] = new_name
+        st["rolls"].pop(old_name, None)
+        self._remember_roll()
         self.save_settings()
         words = f"roll number changed: {old_name} is now {new_name}"
         if renames:
@@ -2055,10 +2191,11 @@ class App:
             # the start number used to sit at 1 for good; now the roll counts on by itself
             if self.settings["start"] <= 1:
                 self.settings["start"] = 0
-        if self.settings["roll_tag"] == "date_day":
-            # the date now has its own switch
-            self.settings["roll_tag"], self.settings["name_date"] = "day", True
-        self.settings["defaults_version"] = 4
+        if not isinstance(saved.get("defaults_version"), int) or saved["defaults_version"] < 5:
+            # the prefix is optional and now starts out empty; "Scan" was only the old default
+            if self.settings["basename"] == "Scan":
+                self.settings["basename"] = ""
+        self.settings["defaults_version"] = 5
         self.save_settings()
 
     def _meta(self, n):
@@ -2167,6 +2304,8 @@ class App:
         self.batch_day = time.strftime("%Y%m%d")
         n = self.next_number()
         done, failed, ending = 0, [], "completed"
+        strip_started = time.time()
+        self.timing = {"strip_started": strip_started, "of": len(indices), "done": 0}
         roll = st["roll"] or outdir.name
         roll_plain = (re.match(r"Roll \d+", roll) or [roll])[0]
         try:
@@ -2177,6 +2316,9 @@ class App:
                 stem = self._stem(folders, n)
                 saved = []
                 log(f"Frame {i + 1} started {time.strftime('%H:%M:%S')}")
+                frame_started = time.time()
+                self.frame_times = {}
+                self.timing.update(frame=i + 1, frame_started=frame_started)
                 try:
                     self._scan_one(s, d, i, n, stem, job, saved)
                 except Exception as e:  # noqa: BLE001
@@ -2196,6 +2338,13 @@ class App:
                 log("Saved as " + ", ".join(saved))
                 done += 1
                 n += 1
+                took = time.time() - frame_started
+                words, waited = self._frame_times_text(took)
+                self.say(f"frame {i + 1} done in {words}")
+                if waited:
+                    self.say(f"frame {i + 1}: {waited}")
+                log(f"Frame {i + 1} took {words}" + (f". {waited[0].upper() + waited[1:]}" if waited else ""))
+                self.timing.update(done=done, last_frame=took, average=(time.time() - strip_started) / done)
         except Cancelled:
             ending = "stopped by the user"
             raise
@@ -2206,13 +2355,19 @@ class App:
             raise
         finally:
             self.batch_day = None
+            strip_took = time.time() - strip_started
+            self.timing = {"last_strip": {"frames": done, "of": len(indices), "seconds": strip_took,
+                                          "average": strip_took / done if done else None,
+                                          "ended": time.strftime("%H:%M")}}
             if done and int(st["start"] or 0) > 0:
                 st["start"] = 0  # a typed number is used once; after that the roll counts on by itself
                 self.save_settings()
             missed = f", {len(failed)} failed (frame {', '.join(map(str, failed))})" if failed else ""
-            log(f"Batch scan {ending} {time.strftime('%H:%M:%S')}: {done} of {len(indices)} frame(s) saved{missed}")
+            each = f", {clock(strip_took / done)} per frame" if done else ""
+            log(f"Batch scan {ending} {time.strftime('%H:%M:%S')}: {done} of {len(indices)} frame(s) saved{missed}."
+                f" It took {clock(strip_took)}{each}")
             log("")
-        self.say(f"scan finished: {done} of {len(indices)} frame(s) saved{missed}")
+        self.say(f"scan finished: {done} of {len(indices)} frame(s) saved{missed}, in {clock(strip_took)}{each}")
         words = f"Strip done: {done} of {len(indices)} frames saved in %s{missed}."
         self.notify(words % roll, words % roll_plain)
         if st["eject_after"]:
@@ -2220,6 +2375,24 @@ class App:
                 self.say("not ejecting, because a frame failed and you may want to scan it again")
             else:
                 self.eject()
+
+    def _frame_times_text(self, took):
+        """How long a frame took, in words, and (when the driver said) whether the scanner had to wait."""
+        t = self.frame_times
+        parts = [f"{name} {clock(t[key])}" for key, name in (("scan", "scanning"), ("clean", "dust removal")) if t.get(key)]
+        rest = took - sum(t.get(key, 0) for key in ("scan", "clean"))
+        if parts and rest >= 1:
+            parts.append(f"the rest {clock(rest)}")
+        words = clock(took) + (f" ({', '.join(parts)})" if parts else "")
+        waited = ""
+        if t.get("passes"):
+            w = t.get("waited", 0.0)
+            if w < 0.05:
+                waited = "the scanner never had to wait for the computer (nothing held its stage up)"
+            else:
+                waited = (f"the scanner had to wait {w:.1f} s for the computer"
+                          + (" (when that happens its stage stops and starts)" if w >= 0.5 else " (too short to matter)"))
+        return words, waited
 
     def _scan_log_open(self, folder, count):
         """Like Nikon Scan's ScanLog.txt: one text file per roll folder saying what each batch did.
@@ -2280,7 +2453,7 @@ class App:
 
         def take(**kw):
             if passes == 1:
-                return s.scan_frame(d.frames[i], **kw, **base, **opts)
+                return self._driver_scan(s, d.frames[i], **kw, **base, **opts)
             return self._averaged(s, i, d.frames[i], passes, kw, base, opts)
 
         def as_scanned(r):  # the colour planes the way the scanner sent them
@@ -2353,7 +2526,7 @@ class App:
         A pass that does not land on the first within half a pixel is left out.
         """
         kw = dict(kw, clean=False)
-        first = s.scan_frame(frame, **kw, **base, **opts)
+        first = self._driver_scan(s, frame, **kw, **base, **opts)
         names = list(first.colors)
         key = "green" if "green" in first.colors else names[0]
         total = {k: first.colors[k].astype(np.uint32) for k in names}
@@ -2367,7 +2540,7 @@ class App:
             if self.cancel:
                 raise Cancelled
             self.say(f"frame {i + 1}: pass {k + 1} of {passes} (same focus and exposure)")
-            r = s.scan_frame(frame, **kw, **base, **again)
+            r = self._driver_scan(s, frame, **kw, **base, **again)
             if r.colors[key].shape != first.colors[key].shape or (ir_total is not None and r.ir is None):
                 self.say(f"frame {i + 1}: pass {k + 1} came back a different size, left out")
                 continue
@@ -2424,6 +2597,7 @@ class App:
             self.say(f"frame {i + 1}: no clear film to measure the infrared against; dust removal skipped")
             return planes
         cleaned, count = result
+        self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
         self.say(f"frame {i + 1}: dust removal rebuilt {count} pixels in {time.time() - started:.0f} s")
         return cleaned
 
@@ -2444,6 +2618,7 @@ class App:
             cleaned = read_tiff_rgb16(dst)
         if cleaned[0].shape != planes[0].shape:
             raise RuntimeError("its picture has a different size")
+        self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
         self.say(f"frame {i + 1}: Nikon ICE finished in {time.time() - started:.0f} s")
         return cleaned
 
@@ -2455,7 +2630,7 @@ class App:
         again["exposures"] = dict(raw_result.exposures)
         pos = raw_result.focus_position
         again["focus"] = int(pos) if pos is not None else "hold"
-        r = s.scan_frame(frame, infrared=True, clean=True, **base, **again)
+        r = self._driver_scan(s, frame, infrared=True, clean=True, **base, **again)
         if r.cleaned is not None:
             self.say(f"dust removal rebuilt {r.cleaned} pixels")
         return as_scanned(r)
@@ -2480,6 +2655,8 @@ select,input[type=number],input[type=text]{width:150px;padding:4px;background:va
 button{padding:6px 10px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer;margin:3px 3px 3px 0}
 button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}button:disabled{opacity:.45;cursor:default}
 .hint{color:var(--mute);font-size:12px;margin:4px 0;overflow-wrap:anywhere}
+.sub{font-weight:600;margin:12px 0 4px;padding-top:10px;border-top:1px solid var(--line)}h2+.sub{border-top:0;padding-top:0;margin-top:0}
+#rollpick{width:100%;margin:4px 0}
 textarea{display:block;width:100%;min-height:64px;padding:6px;margin:4px 0;resize:vertical;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;font:inherit}
 #rollno{width:64px}.warn{color:var(--warn)}
 #thumbwrap{position:relative;overflow-x:auto}#thumbwrap .inner{position:relative;display:inline-block}
@@ -2514,17 +2691,20 @@ body.picking .frame img{cursor:crosshair}
 <p class="hint">Thumbnail only: one quick pass over the strip. "Thumbnail (fast)" cuts each frame out of that pass instead of scanning it again.</p>
 </section>
 <section><h2>Focus &amp; exposure</h2>
+<div class="sub">Do once, now</div>
 <button class="primary" id="b-cal">Calibrate</button><button id="b-af">Autofocus</button><button id="b-ae">Auto exposure</button><button id="b-unlock">Reset</button>
-<p class="hint">These work on the selected frame (or frame 1). Calibrate does both, then keeps that focus and exposure for every frame.</p>
+<p class="hint">Each button does its job once, right away, on the selected frame (or frame 1). Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame. Reset undoes that.</p>
+<p class="hint" id="calinfo"></p>
+<div class="sub">Settings, used for every preview and scan</div>
 <label>Focus<select id="s-focus_mode"><option value="frame">Autofocus each frame once</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
 <label id="posrow">Lens position<input type="number" id="s-focus_position"></label>
 <label>Focus point<span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
 <label>Exposure<select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
 <label>White balance<select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
-<p class="hint" id="calinfo"></p>
 </section>
 <section><h2>Roll</h2>
-<div id="rollname" style="font-weight:600"></div><div class="hint" id="rollfilm"></div>
+<select id="rollpick" title="The roll you are scanning. Pick another one to carry on in it."></select><div class="hint" id="rollfilm"></div>
+<p class="hint warn" id="rollpickmsg" hidden></p>
 <label>Roll number<span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
 <div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
 <button class="primary" id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div>
@@ -2543,10 +2723,10 @@ body.picking .frame img{cursor:crosshair}
 <button class="primary" id="b-rollok">Start new roll</button><button id="b-rollcancel">Cancel</button>
 </div></section>
 <section><h2>When a strip is done</h2>
-<label>iMessage to<input type="text" id="s-notify_imessage" placeholder="your number or Apple ID"></label>
 <label>Banner on this Mac<input type="checkbox" id="s-notify_mac"></label>
+<label>Run a shortcut<input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
 <label>ntfy topic<input type="text" id="s-notify_ntfy" placeholder="optional"></label>
-<p class="hint">Sends a message when a batch finishes or stops on an error. The iMessage goes out through this Mac's Messages app; the first time, macOS asks you to allow it. ntfy is a free phone app, if you prefer that.</p>
+<p class="hint">Tells you when a batch finishes or stops on an error. "Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you (an email to yourself, a reminder with an alert, a push app). ntfy is a free phone app that needs no shortcut.</p>
 <button id="b-notifytest">Send a test</button>
 </section>
 <section><h2>Scan</h2>
@@ -2566,16 +2746,14 @@ body.picking .frame img{cursor:crosshair}
 <label>Negative tone<select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label>Colour space<select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
 <label>File name prefix<input type="text" id="s-basename" placeholder="optional"></label>
-<label>Suffix<input type="text" id="s-suffix"></label>
 <label>Scan date in name<input type="checkbox" id="s-name_date"></label>
-<label>Roll number in name<select id="s-roll_tag"><option value="overall">Overall roll (R017)</option><option value="day">Roll of the day (R02)</option><option value="none">None</option></select></label>
 <label>Counter digits<input type="number" id="s-digits" min="1" max="6"></label>
 <label>Next number<input type="number" id="s-start" min="1"></label>
 <p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
 <label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
 <p class="hint">Galleries sort the scans by this date instead of today's. With only a year, the files get today's day and time in that year. The real scan date stays in the file's description. Leave empty to use today.</p>
 <p class="hint" id="nameex"></p>
-<p class="hint">Names are built as prefix, scan date, picture number, roll number. A part you leave out brings no "_" with it.</p>
+<p class="hint">Names are built as prefix, scan date, picture number, then the number of the roll you are scanning, which is always there. The prefix and the date are optional and bring no "_" when left out.</p>
 <label>Stop on errors<input type="checkbox" id="s-stop_on_errors"></label>
 <label>Eject film when done<input type="checkbox" id="s-eject_after"></label>
 <label>Write scan log<input type="checkbox" id="s-scan_log"></label>
@@ -2585,13 +2763,13 @@ body.picking .frame img{cursor:crosshair}
 </section></div>
 <div><section><h2>Thumbnail</h2><div id="thumbwrap"><div class="inner"><img id="thumb" alt=""></div></div><p class="hint" id="nothumb">No thumbnail yet.</p></section>
 <section><h2>Frames</h2><div id="grid"></div></section>
-<section><h2>Activity</h2><div class="hint" id="progtxt" hidden></div><progress id="prog" value="0" max="1" hidden></progress><div id="log"></div></section></div></main>
+<section><h2>Activity</h2><div id="timing" hidden></div><div class="hint" id="progtxt" hidden></div><progress id="prog" value="0" max="1" hidden></progress><div id="log"></div></section></div></main>
 <script>
 let S=null, sel=new Set(), lastV=-1, stamp=Date.now();
 const $=id=>document.getElementById(id);
 async function api(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return r.json()}
 function selList(){return [...sel].sort((a,b)=>a-b)}
-const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','suffix','digits','start','photo_date','colour_space','roll_tag','name_date','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail','dust_method','grain','restore','notify_mac','notify_imessage','notify_ntfy'];
+const keys=['film','format','preview_mode','preview_dpi','invert_preview','rotate180','focus_mode','focus_position','exposure_mode','white_balance','dpi','samples','ir','clean','negatives','archive','outdir','basename','digits','start','photo_date','colour_space','name_date','tone','stop_on_errors','eject_after','scan_log','auto_thumbnail','dust_method','grain','restore','notify_mac','notify_shortcut','notify_ntfy'];
 let picking=false;
 keys.forEach(k=>{const e=$('s-'+k);e.addEventListener('change',()=>{const v=e.type=='checkbox'?e.checked:e.value;api('/api/settings',{[k]:v})})});
 $('b-fpoint').onclick=()=>{if(S.settings.focus_point){api('/api/settings',{focus_point:null});return}picking=!picking;document.body.classList.toggle('picking',picking);$('fpoint').textContent=picking?'click a preview…':'centre'};
@@ -2618,6 +2796,12 @@ $('b-rollcancel').onclick=()=>{$('rolldlg').hidden=true;$('b-newroll').hidden=fa
 $('b-rollok').onclick=async()=>{const b={};rollKeys.forEach(k=>b[k]=$('r-'+k).value);
  const r=await api('/api/newroll',b);if(r.busy){$('rollfilm').textContent='Wait until the scan finishes, then try again.';return}$('rolldlg').hidden=true;$('b-newroll').hidden=false};
 $('b-notifytest').onclick=()=>api('/api/notifytest');
+async function shortcutNames(){try{const r=await (await fetch('/api/shortcuts')).json();$('shortcutlist').innerHTML=r.names.map(n=>'<option value="'+n.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')+'">').join('')}catch(e){}}
+$('s-notify_shortcut').addEventListener('focus',shortcutNames);
+$('rollpick').onchange=async()=>{const r=await api('/api/switchroll',{name:$('rollpick').value});const m=$('rollpickmsg');
+ m.hidden=!!r.ok;if(!r.ok){m.textContent=r.busy?'Wait until the scan finishes, then pick the roll again.':(r.error||'That did not work.');$('rollpick').value=S.settings.roll}};
+function clock(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+let lastStrip=null;
 $('b-scan').onclick=()=>api('/api/scan',{frames:selList()});$('b-stop').onclick=()=>api('/api/stop');
 let anchor=null;
 function toggle(i,ev){ev=ev||{};
@@ -2633,6 +2817,9 @@ $('b-rr').onclick=()=>api('/api/rotate',{frames:selList().length?selList():S.fra
 function fillSelect(id,vals,cur,lab){const e=$(id);const want=vals.map(String).join();if(e.dataset.v!==want){e.innerHTML=vals.map(v=>`<option value="${v}">${lab?lab(v):v}</option>`).join('');e.dataset.v=want}e.value=String(cur)}
 function render(force){
  if(!S)return; const st=S.settings, c=S.caps, busy=!!S.job;
+ // a selection belongs to the strip it was made on: another strip, or fewer frames, and it goes
+ if(S.strip!==lastStrip){if(lastStrip!==null){sel.clear();anchor=null}lastStrip=S.strip}
+ for(const i of [...sel])if(i>=S.frames.length)sel.delete(i);
  $('status').title=c&&c.revision?'Firmware '+c.revision:'';$('status').textContent=(S.demo?'DEMO · ':'')+(c?(c.product+' · '+c.optical_dpi+' dpi'+(c.holder?' · '+c.holder:'')+(S.film_in===false?' · no film':'')):'not connected')+(busy?' · '+S.job+'…':'');
  keys.forEach(k=>{const e=$('s-'+k);if(document.activeElement===e)return;if(e.type=='checkbox')e.checked=!!st[k];else if(k=='start')e.value=S.next_number;else if(!['dpi','preview_dpi','samples','format'].includes(k))e.value=st[k]??''});
  const opt=c?c.optical_dpi:2900, lo=c&&c.x_dpi_range?c.x_dpi_range[0]:73;
@@ -2641,14 +2828,15 @@ function render(force){
  const ms=c?(c.max_samples||1):1;fillSelect('s-samples',[1,2,4,8,16].filter(n=>n<=Math.max(ms,4)),st.samples,v=>v==1?'Off':(v<=ms?v+'x (one pass)':v+'x ('+v+' passes)'));
  $('mshint').textContent=st.samples>ms?('Cleaner shadows by averaging '+Math.min(st.samples,4)+' passes. Each frame takes that many times longer.'):'';
  const fmts=c&&c.film_formats?c.film_formats:[];$('fmtrow').hidden=!fmts.length;fillSelect('s-format',[''].concat(fmts),st.format,v=>v||'From holder');
- for(const id of ['b-load','b-eject','b-thumb','b-preview','b-cal','b-af','b-ae','b-unlock','b-scan','b-connect','b-rl','b-rr','b-newroll','b-rollok','b-rollno','b-rollnoyes'])$(id).disabled=busy;$('b-stop').disabled=!busy;
+ for(const id of ['b-load','b-eject','b-thumb','b-preview','b-cal','b-af','b-ae','b-unlock','b-scan','b-connect','b-rl','b-rr','b-newroll','b-rollok','b-rollno','b-rollnoyes','rollpick'])$(id).disabled=busy;$('b-stop').disabled=!busy;
  if(c&&!c.thumbnail){$('s-preview_mode').value='scan';$('s-preview_mode').disabled=true}else $('s-preview_mode').disabled=false;
  $('negrow').hidden=!!st.archive;$('dustrow').hidden=!st.clean;
  const iceopt=$('s-dust_method').querySelector('option[value=ice]');iceopt.hidden=iceopt.disabled=!S.ice_helper;
  const nf=S.frames.length, ns=sel.size;
  $('b-scan').textContent=ns?`Scan ${ns} selected frame${ns>1?'s':''}`:(nf?`Scan all ${nf} frame${nf>1?'s':''}`:'Scan all frames');
  $('b-preview').textContent=ns?`Preview ${ns} selected`:'Preview all';
- $('rollname').textContent=st.roll||'';$('rollfilm').textContent=(S.film_text?('Film: '+S.film_text):'No film details')+' · saving in '+(S.roll_path||'')+(st.archive?' (RAW/ and Positive/)':'');
+ if(document.activeElement!==$('rollpick')){const rp=$('rollpick'),want=S.rolls.join('\n');if(rp.dataset.v!==want){rp.innerHTML='';for(const n of S.rolls){const o=document.createElement('option');o.value=n;o.textContent=n;rp.appendChild(o)}rp.dataset.v=want}rp.value=st.roll||''}
+ $('rollfilm').textContent=(S.film_text?('Film: '+S.film_text):'No film details')+' · saving in '+(S.roll_path||'')+(st.archive?' (RAW/ and Positive/)':'');
  if(document.activeElement!==$('rollno')&&$('rollnodlg').hidden)$('rollno').value=S.roll_number||'';
  const dsc=$('rolldesc');if(document.activeElement!==dsc&&Date.now()>descHold)dsc.value=st.film_description||'';
  $('nameex').textContent='Sample: '+(st.archive?'RAW/ and Positive/':'')+S.sample_name;
@@ -2670,6 +2858,11 @@ function render(force){
     const i=+e.dataset.i;api('/api/settings',{focus_point:toScanner([(ev.clientX-r.left)/r.width,(ev.clientY-r.top)/r.height],S.turns[i]||0)});return}
    toggle(+e.dataset.i,ev)});
   $('log').textContent=S.log.join('\n');$('log').scrollTop=1e9;lastV=S.version}
+ const tm=S.timing||{}, tl=$('timing');let tt='';
+ if(busy&&tm.strip_started){const left=tm.average?tm.average*(tm.of-tm.done)-(tm.frame_started?Math.min(tm.average,tm.now-tm.frame_started):0):null;
+  tt='Frame '+(tm.frame||'')+' ('+Math.min(tm.done+1,tm.of)+' of '+tm.of+') · '+clock(tm.now-(tm.frame_started||tm.now))+' on this frame · '+clock(tm.now-tm.strip_started)+' on this strip'+(left!==null?' · about '+clock(left)+' left':'')+(tm.last_frame?' · last frame took '+clock(tm.last_frame):'')}
+ else if(tm.last_strip){const ls=tm.last_strip;tt='Last strip: '+ls.frames+' of '+ls.of+' frame'+(ls.of==1?'':'s')+' in '+clock(ls.seconds)+(ls.average?' ('+clock(ls.average)+' per frame)':'')+', finished '+ls.ended}
+ tl.hidden=!tt;tl.textContent=tt;
  const p=S.progress;$('prog').hidden=!p;$('progtxt').hidden=!p;if(p){$('prog').max=p.total||1;$('prog').value=p.done;$('progtxt').textContent=`${S.job}: ${p.phase} ${p.total?Math.round(100*p.done/p.total):0}%`}
 }
 async function poll(){try{S=await (await fetch('/api/state')).json();render(false)}catch(e){$('status').textContent='app stopped'}setTimeout(poll,500)}
@@ -2700,6 +2893,8 @@ def make_handler(app):
                 return self._send(PAGE, "text/html; charset=utf-8")
             if path == "/api/state":
                 return self._send(app.state())
+            if path == "/api/shortcuts":
+                return self._send({"names": list_shortcuts()})
             if path == "/thumb.png" and app.thumb_png:
                 return self._send(app.thumb_png, "image/png")
             if path.startswith("/preview/") and path.endswith(".png"):
@@ -2759,9 +2954,11 @@ def make_handler(app):
             if path == "/api/rollnumber":
                 return self._send(app.quick_job("renumbering", lambda: app.renumber_roll(
                     body.get("number"), bool(body.get("move_aside")))))
+            if path == "/api/switchroll":
+                return self._send(app.quick_job("changing roll", lambda: app.switch_roll(body.get("name"))))
             if path == "/api/notifytest":
                 if not app.notify("Test message. This is how you will hear that a strip is done."):
-                    app.say("nothing to send to yet: fill in a number or Apple ID, or tick the banner")
+                    app.say("nothing to send to yet: tick the banner, name a shortcut or give an ntfy topic")
                 return self._send({"ok": True})
             if path == "/api/unlock":
                 app.focus_lock = app.exposure_lock = None
@@ -2771,7 +2968,7 @@ def make_handler(app):
                 return self._send({"ok": True})
             if path == "/api/settings":
                 for k, v in body.items():
-                    if k in ("roll", "film_description"):
+                    if k in ("roll", "film_description", "rolls"):
                         continue  # these have their own buttons, which also look after the folder
                     if k in app.settings:
                         old = app.settings[k]
@@ -2811,6 +3008,7 @@ def main():
     app = App(demo=args.demo)
     if not args.demo:
         app.load_settings()
+        app.driver_log.start()
     app.roll_dir()
     app.read_description()
     try:

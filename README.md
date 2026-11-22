@@ -38,10 +38,14 @@ To try the screens without the scanner: `python coolscan.py --demo`.
 - **Preview**: a preview of each frame (or the selected ones). "Preview from" picks how:
   - *Preview scan*: a low-resolution scan of each frame (sharper, slower).
   - *Thumbnail (fast)*: cuts each frame out of the thumbnail pass, so nothing is scanned again.
-- **Calibrate**: autofocus and auto exposure on the selected frame, then keeps that focus and
-  exposure for every preview and scan (like locking AE in Nikon Scan).
-- **Autofocus** / **Auto exposure**: either one on its own. "Pick" lets you click a preview to
-  choose the focus point. "Reset" goes back to focusing and exposing each frame on its own.
+- **Focus & exposure** has two parts. The buttons under "Do once, now" act once, right away, on
+  the selected frame. The choices under "Settings" are used for every preview and scan.
+  - **Calibrate**: autofocus and auto exposure on the selected frame, then switches the settings
+    to keep that focus and exposure for every preview and scan (like locking AE in Nikon Scan).
+  - **Autofocus** / **Auto exposure**: either one on its own. "Pick" lets you click a preview to
+    choose the focus point. "Reset" goes back to focusing and exposing each frame on its own.
+  - With "Autofocus each frame once" (the default) the scanner focuses each frame one time, and
+    the lens is then left where it is for that frame's passes.
 - **Rotate all 180°**: turns every preview and every saved scan.
 - **Rotate selected ⟲ / ⟳ 90°**: turns the selected frames. Click selects one frame,
   ⌘-click adds or removes one, Shift-click selects a range.
@@ -73,11 +77,11 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   finished picture, inverted if it is a negative, with dust removed if ticked. Both come from
   one pass, so a frame takes about half as long as it did with two passes.
 - **File names** are built in this order: prefix, scan date, picture number, roll number, e.g.
-  `20261122_005_R001.tif`, or `Scan_20261122_005_R001.tif` with a prefix. Every part but the
-  picture number is optional (prefix field, "Scan date in name", "Roll number in name") and
-  brings its own `_`, so a part you leave out leaves no stray underscore. The date is the day
-  of the scan, not the "Photo taken" date. A batch that runs past midnight keeps the date it
-  started with.
+  `20261122_005_R001.tif`. The roll number is always there and is the number of the roll you
+  are scanning. The prefix is empty unless you type one (`Trip_20261122_005_R001.tif`), and the
+  date can be switched off with "Scan date in name"; each brings its own `_`, so leaving one
+  out leaves no stray underscore. The date is the day of the scan, not the "Photo taken" date.
+  A batch that runs past midnight keeps the date it started with.
 - **Next number**: shows the number the next scan gets. It counts on by itself from the pictures
   already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
   another number to carry on from there; it is used for the next batch, then the roll counts on
@@ -86,7 +90,6 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   as a starting point for editing (for example Lightroom's Auto). "Nikon Scan look" gives
   negatives the same brightness and contrast as Nikon Scan, measured on five frames scanned in
   both programs.
-- **Roll number in name**: the overall roll number (`R002`), the roll of the day (`R02`), or none.
 - **Colour space**: finished pictures are saved in ProPhoto RGB by default, converted through
   Nikon's LS-40 profile, with the ProPhoto profile embedded. Also Adobe RGB (1998), sRGB,
   Apple RGB, ColorMatch, Bruce, Wide Gamut, or Scanner RGB (Nikon's profile, no conversion).
@@ -99,6 +102,10 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   is named from them, e.g. `Roll 002 - Kodak Portra ISO 400`, numbering starts again at 001,
   and the film details are written into each file (description and EXIF ISO). The current roll
   and settings are remembered between runs (in `~/.coolscan.json`).
+- **Going back to a roll**: the list at the top of the Roll box holds every roll folder in the
+  target folder. Pick one and the next scans go into it again, counting on from the pictures
+  already there, with that roll's number, film details and description. Nothing is renamed or
+  moved. Not while a scan is running.
 - **Roll number**: type another number and press Change to renumber the roll you are scanning.
   Its folder is renamed and so is the `_R…` part of its files. If older roll folders already
   use that number or a higher one, nothing happens until you agree: then they are moved, whole
@@ -107,12 +114,17 @@ To try the screens without the scanner: `python coolscan.py --demo`.
 - **Film description**: free text about the roll (camera, place, dates). It is saved as
   `Description.txt` in the roll folder and updated whenever you change it, also during a scan.
   New roll… has the same box. If you edit the file by hand, the app picks that up when it starts.
-- **When a strip is done**: sends a message when a batch finishes or stops on an error, with
-  the number of frames saved and the roll. Fill in your own number or Apple ID for an iMessage
-  (sent through this Mac's Messages app; macOS asks once for permission), tick the banner for a
-  notification on the Mac, or give an ntfy topic for the free ntfy phone app. "Send a test"
-  tries it. For ntfy, which goes through a server on the internet, only the roll number is
-  sent, not your film notes.
+- **When a strip is done**: tells you when a batch finishes or stops on an error, with the
+  number of frames saved and the roll. Three ways, any mix of them:
+  - *Banner on this Mac*: a notification on the Mac.
+  - *Run a shortcut*: type the name of one of your own shortcuts from the Shortcuts app (the
+    field suggests them). The app runs it and hands it the message as text, so the shortcut
+    decides how it reaches you: an email to yourself, a reminder with an alert, a push app.
+  - *ntfy topic*: the free ntfy phone app. It goes through a server on the internet, so only
+    the roll number is sent, not your film notes.
+
+  "Send a test" tries them. (The iMessage option is gone: a message to your own account does
+  not ring your phone.)
 - **Photo taken**: type a year (or year-month-day) and the files get that as their EXIF
   "date taken" and as the file's own date, so Apple Photos, Lightroom and Google Photos sort
   them by it. With only a year (`2005`), the files get the day and time of the scan in that
@@ -125,8 +137,17 @@ To try the screens without the scanner: `python coolscan.py --demo`.
   first failure instead. A lost connection or missing film always stops the batch.
 - **Eject film when done**: ejects the strip after a batch in which every frame was saved.
 - **Write scan log**: adds to `ScanLog.txt` in the roll folder, like Nikon Scan's scan log: the
-  scanner and settings, then for each frame when it started and which files were saved, or why
-  it failed.
+  scanner and settings, then for each frame when it started, which files were saved and how
+  long it took, or why it failed.
+- **Scan times**: while a strip is scanned, the line above the Activity list shows the time on
+  this frame, the time on this strip and about how long is left. Each finished frame writes its
+  time in the Activity list and the scan log (scanning and dust removal apart), and the strip
+  its total and the time per frame.
+- **The stall check**: during a pass the scanner sends the picture while its stage moves. If the
+  computer is slow to take it, the scanner's memory fills and the stage has to stop and start
+  again. The driver measures that, and after each frame the Activity list says either "the
+  scanner never had to wait for the computer" or for how long it waited. The driver's own
+  notes are in `~/.coolscan-driver.log`, started fresh each time the app starts.
 
 Previews of negatives are inverted so you can judge them. Negatives are saved as positives unless
 you choose otherwise under "Negatives saved as".
@@ -148,6 +169,12 @@ brackets (send that part along if you report a problem).
 
 ## Tested so far
 
+Added late on 2026-11-22, tested with the pretend scanner and a browser only: scan times, the
+stall check (its reading of the driver's notes was tested on made-up lines in the driver's
+format, because the driver only writes real ones during a real pass), leaving the lens where
+it is, "Run a shortcut" (the Shortcuts command was stood in for; it has not run on a Mac),
+going back to a roll, and the selection being dropped when another strip goes in.
+
 Thumbnail, preview, scanning, Archive mode (then with two passes) and saving have run on the
 LS-40 on the Mac (2026-11-22), and five frames were compared with Nikon Scan's own scans.
 Features added after that (rolls, roll number in names, Nikon tone, photo date, ProPhoto as
@@ -162,8 +189,8 @@ Added on 2026-11-22 in the evening, none of it run on the scanner yet:
   purpose. Not compared with Nikon's GEM and ROC.
 - Multi-sample by averaging passes: pretend scanner only. Earlier scans of the same frames
   landed within about 0.1 to 0.4 pixel of each other, which is why it should work.
-- Messages: the iMessage and the banner run through macOS and could only be tested with a
-  stand-in, so use "Send a test" first. ntfy was tested against a local stand-in server.
+- Messages: the banner runs through macOS and could only be tested with a stand-in, so use
+  "Send a test" first. ntfy was tested against a local stand-in server.
 - Roll number change, film description, the file name order (prefix, date, number, roll), the
   next number and the "Photo taken" year: pretend scanner and a browser, with real folders and
   files, including rolls that hold names from the earlier versions.
