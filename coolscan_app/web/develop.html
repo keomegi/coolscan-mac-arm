@@ -1,0 +1,112 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan re-develop</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+/* the re-develop page: one column; RAW files, how to develop them, a look at one, saving */
+main.dev{display:block;overflow:auto;padding:12px 16px 24px}
+main.dev>section{margin-bottom:12px}
+#bar a{color:var(--acc);text-decoration:none;padding:0 4px}
+#bar a:hover{text-decoration:underline}
+.pickrow{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.pickrow label{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--ink2)}
+.pickrow input[type=text]{min-width:min(360px,80vw)}
+table.files{width:100%;border-collapse:collapse;margin-top:8px}
+.files th,.files td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line2);vertical-align:middle}
+.files th{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em}
+.files tr.cur td{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.files tbody tr{cursor:pointer}
+.files td.x{width:1%;white-space:nowrap}
+.filebox{max-height:260px;overflow:auto}
+#howform{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 16px}
+#howform label{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--ink2)}
+#howform label.tickrow{flex-direction:row;align-items:center;gap:8px;align-self:end;min-height:26px;color:var(--ink)}
+#howform select{width:100%}
+.views{display:flex;flex-wrap:wrap;gap:4px}
+.lookgrid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:8px}
+#over{position:relative;line-height:0;cursor:crosshair;max-width:1000px;user-select:none}
+#over img{display:block;max-width:100%;max-height:70vh;border-radius:6px;background:var(--stage);image-orientation:none}
+#over .mark{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid #fff;box-shadow:0 0 0 1px #000;border-radius:3px;pointer-events:none}
+#over #cropbox{position:absolute}
+body.cropping #over{cursor:cell}
+#pieces{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+#pieces figure{margin:0;border:1px solid var(--line);border-radius:8px;padding:6px;min-width:0}
+#pieces figure.on{border-color:var(--acc)}
+#pieces img{display:block;width:100%;image-rendering:pixelated;border-radius:4px;background:var(--stage);cursor:zoom-in}
+#pieces figcaption{font-size:12px;margin-top:4px;color:var(--ink2)}
+#notes p{margin:4px 0}
+.warn{color:var(--warn)}
+#zoomimg.pixels{image-rendering:pixelated;width:min(96vw,960px);max-height:none}
+</style></head><body>
+<header id="bar">
+<div class="brand"><h1>Coolscan re-develop</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
+<div class="tools" role="toolbar" aria-label="Re-develop">
+<button class="primary" id="b-run" title="Develop the ticked files (or all of them) into a new folder">Develop all files</button>
+<button id="b-stop" disabled title="Stop after the current file">Stop</button>
+<span class="gap"></span>
+<a href="/" title="Back to scanning">Scanning screen</a>
+</div>
+<div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span></div>
+</header>
+<main class="dev">
+
+<section aria-label="RAW files">
+<div class="head"><h2>1. RAW files</h2><span class="hint">Archive mode keeps the untouched scan with its infrared in each roll's RAW folder. Pick a roll, or type a folder.</span></div>
+<div class="pickrow">
+<label>Roll<select id="roll"></select></label>
+<label>or a folder<input type="text" id="path" placeholder="~/Pictures/Coolscan/Roll 003/RAW"></label>
+<button id="b-look">Show the files</button>
+</div>
+<p class="hint" id="foldermsg"></p>
+<div class="filebox"><table class="files" id="filetable" hidden><thead><tr><th><input type="checkbox" id="tickall" aria-label="Tick all files"></th><th>File</th><th>Film</th><th>Size</th><th>Notes</th></tr></thead><tbody id="files"></tbody></table></div>
+</section>
+
+<section aria-label="How to develop">
+<div class="head"><h2>2. How to develop</h2><span class="hint">Used for the pictures below and for every file you develop. Nothing is scanned again.</span></div>
+<div id="howform">
+<label>Film<select id="h-film">
+<option value="">As the file says</option><option value="negative">Colour negative</option><option value="positive">Slide (positive)</option>
+<option value="kodachrome">Kodachrome</option><option value="mono">Black-and-white negative</option></select></label>
+<label>Colour of negatives<select id="h-film_profile"></select></label>
+<label>Negative tone<select id="h-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
+<label>Colour space<select id="h-colour_space"></select></label>
+<label>Restore faded colours<select id="h-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
+<label>Grain reduction<select id="h-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
+<label>Dust removal by<select id="h-dust_method"><option value="builtin">Built in</option><option value="ice">Nikon ICE (helper)</option></select></label>
+<label class="tickrow"><input type="checkbox" id="h-clean"><span>Dust &amp; scratch removal</span></label>
+</div>
+<p class="hint">The driver's dust removal (the older method) is not offered here: it works by scanning the film a second time.</p>
+</section>
+
+<section aria-label="Look">
+<div class="head"><h2>3. Look</h2><span class="hint" id="lookhint"></span></div>
+<div class="views" role="tablist" aria-label="Which version" id="views"></div>
+<div class="btnrow">
+<button id="b-left" title="Turn a quarter to the left">Turn left</button>
+<button id="b-right" title="Turn a quarter to the right">Turn right</button>
+<button id="b-crop" aria-pressed="false" title="Drag on the picture to mark the part to save">Crop</button>
+<button id="b-cropclear" hidden>Clear crop</button>
+</div>
+<div id="notes"></div>
+<div class="lookgrid">
+<div id="over"><img id="overimg" alt=""><span class="mark" id="mark"></span><div id="cropbox" hidden></div></div>
+<p class="hint" id="overhint">Click a spot to see it at full size, in all four versions side by side, below.</p>
+<div id="pieces"></div>
+</div>
+<p class="hint" id="nolook">Pick a file above to look at it.</p>
+</section>
+
+<section aria-label="Save">
+<div class="head"><h2>4. Save</h2><span class="hint">Each run saves into a new folder, Re-developed/&lt;date and time&gt; inside the roll's folder, with the same file names as the RAW files and a Develop log.txt. Nothing is ever overwritten.</span></div>
+<label class="tickrow"><input type="checkbox" id="extras"> Also save the in-between steps, to compare them: the file with the dust removed as scanned (not inverted), and the finished picture without dust removal</label>
+<div id="results"></div>
+</section>
+
+<section id="activity" aria-label="Activity">
+<div class="head"><h2>Activity</h2></div>
+<div id="log" role="log"></div>
+</section>
+</main>
+
+<dialog id="zoom"><img id="zoomimg" alt=""><span id="zoomcap"></span></dialog>
+<script src="/develop.js"></script>
+</body></html>

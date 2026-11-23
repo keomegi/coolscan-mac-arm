@@ -11,7 +11,8 @@ def default_settings():
     return {
         "film": "negative", "format": "", "preview_dpi": 290,
         "dpi": 2900, "samples": 1, "ir": True, "clean": True,
-        "multi_exposure": 0,  # 0 = off; 2 or 4 = a second pass exposed that many times longer, merged in
+        "multi_exposure": 0,
+        "crop_scan": True,  # a cropped frame: the scanner reads only the crop (not in Archive mode)  # 0 = off; 2 or 4 = a second pass exposed that many times longer, merged in
         "focus_mode": "frame", "focus_point": None, "focus_position": 0,
         "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
         "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
@@ -32,7 +33,7 @@ def default_settings():
 
 # what a saved set of settings holds: how to scan and save, not where (folder, roll) or who to tell
 PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "multi_exposure", "ir", "clean", "dust_method", "grain", "restore",
-               "focus_mode", "exposure_mode", "white_balance", "invert_preview", "negatives", "archive",
+               "focus_mode", "exposure_mode", "white_balance", "invert_preview", "negatives", "archive", "crop_scan",
                "colour_space", "tone", "basename", "name_date", "digits", "stop_on_errors", "eject_after",
                "scan_log", "auto_thumbnail", "film_profile")
 

@@ -1,11 +1,16 @@
 """Writing PNG and TIFF files, and reading a TIFF back."""
 
+import datetime
+import json
 import math
 import os
 import struct
 import zlib
 
 import numpy as np
+
+
+COOLSCAN_TAG = 65000  # a private TIFF tag: the app's note on how the scan was made, as JSON text
 
 
 def _png_chunk(kind, data):
@@ -81,6 +86,8 @@ def write_tiff(path, planes, dpi, icc=None, meta=None):
     exif = [(36864, b"0230"), (40961, int(meta.get("colorspace", 65535)))]  # ExifVersion, ColorSpace
     tags.append((274, 3, 1, 1))  # Orientation: as stored
     ascii_tags = [(270, meta.get("description")), (271, meta.get("make")), (272, meta.get("model"))]
+    if meta.get("coolscan"):  # how the scan was made (film, exposures, ...), so it can be developed again later
+        ascii_tags.append((COOLSCAN_TAG, json.dumps(meta["coolscan"], separators=(",", ":"))))
     taken = meta.get("taken")
     if taken:
         stamp = taken.strftime("%Y:%m:%d %H:%M:%S")
@@ -101,7 +108,7 @@ def write_tiff(path, planes, dpi, icc=None, meta=None):
         tail.extend(blob)
         if len(tail) % 2:
             tail.append(0)
-        return off, len(text) + 1
+        return off, len(blob)  # (a short text is padded so it never fits in the entry itself)
 
     for tag, text in ascii_tags:
         if text:
@@ -188,3 +195,81 @@ def read_tiff16(path):
         return [a[k].astype(np.uint16) for k in range(spp)]
     a = a.reshape(rows, cols, spp)
     return [np.ascontiguousarray(a[..., k]).astype(np.uint16) for k in range(spp)]
+
+
+def read_tiff_info(path):
+    """What a TIFF says about itself, without reading its pixels: size, channels, resolution, the
+    embedded colour profile, the EXIF dates and film speed, and the app's own note (COOLSCAN_TAG).
+
+    Returns a dict; anything the file does not have is left out (the note is {} then)."""
+    with open(path, "rb") as f:
+        head = f.read(8)
+        order = {b"II": "<", b"MM": ">"}.get(head[:2])
+        if order is None or len(head) < 8 or struct.unpack(order + "H", head[2:4])[0] != 42:
+            raise ValueError("not a TIFF file")
+        sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1}
+
+        def ifd(at):
+            f.seek(at)
+            count = struct.unpack(order + "H", f.read(2))[0]
+            raw = f.read(12 * count)
+            out = {}
+            for k in range(count):
+                tag, typ, n = struct.unpack(order + "HHI", raw[12 * k:12 * k + 8])
+                if typ not in sizes:
+                    continue
+                size = sizes[typ] * n
+                value = raw[12 * k + 8:12 * k + 12]
+                out[tag] = (typ, n, value, size)
+            return out
+
+        def value(entry):
+            typ, n, value, size = entry
+            if size > 4:
+                if size > 4 << 20:
+                    return None
+                f.seek(struct.unpack(order + "I", value)[0])
+                value = f.read(size)
+            value = value[:size]
+            if typ == 2:
+                return value.split(b"\0", 1)[0].decode("latin-1")
+            if typ in (1, 7):
+                return value
+            if typ == 5:
+                a, b = struct.unpack(order + "II", value[:8])
+                return a / b if b else None
+            code = "H" if typ == 3 else "I"
+            return struct.unpack(order + code * n, value)
+
+        tags = ifd(struct.unpack(order + "I", head[4:8])[0])
+        info = {"cols": value(tags[256])[0], "rows": value(tags[257])[0],
+                "channels": value(tags[277])[0] if 277 in tags else 1}
+        if 282 in tags:
+            dpi = value(tags[282])
+            if dpi:
+                info["dpi"] = int(round(dpi))
+        if 34675 in tags:
+            info["icc"] = bytes(value(tags[34675]) or b"") or None
+        for tag, key in ((270, "description"), (271, "make"), (272, "model"), (306, "datetime")):
+            if tag in tags:
+                info[key] = value(tags[tag])
+        info["coolscan"] = {}
+        if COOLSCAN_TAG in tags:
+            try:
+                note = json.loads(value(tags[COOLSCAN_TAG]) or "{}")
+                info["coolscan"] = note if isinstance(note, dict) else {}
+            except ValueError:
+                pass
+        if 34665 in tags:
+            exif = ifd(value(tags[34665])[0])
+            if 36867 in exif:
+                info["datetime"] = value(exif[36867])
+            if 34855 in exif:
+                info["iso"] = value(exif[34855])[0]
+        stamp = info.pop("datetime", None)
+        if stamp:
+            try:
+                info["taken"] = datetime.datetime.strptime(stamp.strip(), "%Y:%m:%d %H:%M:%S")
+            except ValueError:
+                pass
+    return info

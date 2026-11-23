@@ -99,10 +99,23 @@ class _Demo:
         if isinstance(focus, int) and not isinstance(focus, bool):
             self.focus_moves += 1
             self.focus = focus
-        self._wait(progress, "scan", 10 if dpi < 1000 else 30)
         r = self.Result()
-        rows, cols = int(0.94 * dpi), int(1.42 * dpi)
-        r.colors = self._film(rows, cols, frame[0] % 7)
+        # like nkscan, the pass is the rectangle asked for: a crop of a frame comes back as just that
+        # part. Columns run along the feed from the top address, rows along the sensor from the
+        # highest X address down (nkscan's PYTHON.md)
+        k = max(0, (int(frame[0]) - 600) // 14000)
+        top, left, bottom, right = k * 14000 + 600, 50, k * 14000 + 13400, 900  # the whole frame
+        full_rows, full_cols = int(0.94 * dpi), int(1.42 * dpi)
+        c0 = int(round((int(frame[0]) - top) / (bottom - top) * full_cols))
+        c1 = int(round((int(frame[2]) - top) / (bottom - top) * full_cols))
+        r0 = int(round((right - int(frame[3])) / (right - left) * full_rows))
+        r1 = int(round((right - int(frame[1])) / (right - left) * full_rows))
+        c0, r0 = max(0, c0), max(0, r0)
+        c1, r1 = min(full_cols, max(c0 + 8, c1)), min(full_rows, max(r0 + 8, r1))
+        share = (c1 - c0) * (r1 - r0) / (full_cols * full_rows)  # less to send, so a shorter pass
+        self._wait(progress, "scan", max(2, int(round((10 if dpi < 1000 else 30) * share))))
+        rows, cols = r1 - r0, c1 - c0
+        r.colors = {n: np.ascontiguousarray(p[r0:r1, c0:c1]) for n, p in self._film(full_rows, full_cols, top % 7).items()}
         rng = np.random.default_rng()
         usual = {"red": 1200, "green": 900, "blue": 700}
         for name, plane in r.colors.items():  # noise that differs on every pass, like the real thing
@@ -113,8 +126,8 @@ class _Demo:
         r.ir = np.full((rows, cols), 50000, np.uint16) if (infrared or clean) else None
         # specks and a scratch that block the light, in the picture and in the infrared
         size = max(1, dpi // 500)
-        spots = [((53 * k + 17) % (rows - 8 * size), (211 * k + 40) % (cols - 8 * size), size * (1 + k % 3))
-                 for k in range(40)]
+        spots = [((53 * n + 17) % max(1, rows - 8 * size), (211 * n + 40) % max(1, cols - 8 * size), size * (1 + n % 3))
+                 for n in range(40)]
         marks = [(slice(y, y + n), slice(x, x + n)) for y, x, n in spots]
         marks.append((slice(rows // 3, rows // 3 + size), slice(cols // 4, cols // 2)))
         dusty = 0

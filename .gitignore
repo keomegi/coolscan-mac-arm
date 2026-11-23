@@ -20,6 +20,21 @@ scans/
 *.jpeg
 *.zip
 
+# Test mode's results (python coolscan.py --test saves them here; never commit)
+Tests/
+
+# Test mode itself, kept local only like notify.py: the app runs without it (never commit)
+coolscan_app/testmode.py
+coolscan_app/web/test.html
+coolscan_app/web/test.js
+tests/
+
+# Driver probes and logs from troubleshooting
+*_probe.py
+*_probe.log
+driver-log-copy.txt
+*.log
+
 # Nikon's copyrighted software (never commit)
 app_scan.iso
 *.iso
@@ -29,3 +44,6 @@ app_scan.iso
 *.EXE
 *.msi
 *.cab
+
+# Optional module, kept local only (never commit)
+coolscan_app/notify.py

@@ -26,7 +26,7 @@ python coolscan.py
 You see `(.venv)` at the start of the Terminal prompt while the environment is on.
 Your browser opens on the app. Press Ctrl-C in Terminal to quit.
 To try the screens without the scanner: `python coolscan.py --demo`.
-To compare settings on one frame: `python coolscan.py --test` (see "Test mode" below).
+To compare settings on one frame or a whole strip: `python coolscan.py --test` (see "Test mode" below).
 
 ## How the app is put together
 
@@ -43,10 +43,11 @@ one file per job:
 | `dust.py` | dust and scratch removal from the infrared picture |
 | `enhance.py` | grain reduction, faded-colour restoration, lining passes up, putting two exposures together |
 | `imaging.py` | writing TIFF and PNG files, reading a saved TIFF back |
-| `notify.py` | banner, shortcut and ntfy messages |
+| `notify.py` | banner, shortcut and ntfy messages. Optional and listed in `.gitignore`: without it the app runs and the "Tell me" options are hidden |
 | `driver.py` | the stall check, and the driver's failures in plain words |
+| `keepawake.py` | keeps the Mac from going to sleep while a job runs, and notices when it slept anyway |
 | `demo.py` | the pretend scanner |
-| `testmode.py` | test mode: the queue of runs on one frame, and its results |
+| `testmode.py` | test mode: the queue of runs on one frame, ticked frames or the whole strip, and its results |
 | `server.py` | the web page's server and the start-up |
 | `web/` | the page itself: `index.html`, `style.css`, `app.js`; test mode's page: `test.html`, `test.js` |
 
@@ -78,8 +79,18 @@ On the right are the film and the picture:
 - **Enlarge**: double-click a frame or the big picture, or press Space, to see it as large as
   the window. Click or press Esc to go back.
 - **Crop**: press Crop and drag a box on the big picture. That part of the frame is what gets
-  saved when the frame is scanned (also its `_IR.tif`). In Archive mode `RAW/` always keeps the
-  whole frame and only `Positive/` is cropped. The crop belongs to that frame of that strip,
+  saved when the frame is scanned (also its `_IR.tif`). To change a crop, drag one of its sides
+  or corners, or drag its middle to move it (no need to press Crop first). With "Scan only the cropped part"
+  ticked (Save as box, on by default) the scanner reads only that part, as Nikon Scan does: the
+  film is stepped only over the crop and only the crop crosses the scanner's slow USB link, so a
+  crop of half the frame should take about half the scanning time (focus and exposure take as
+  long as before). Exposure is still measured on the whole frame, so a cropped frame comes out
+  as bright as its preview; focus is the frame's own, or the focus point when you chose one.
+  After such a scan the big picture stays the whole frame (marked Scanned), so the crop box can
+  still be moved for another scan. Unticked, the whole frame is scanned and the crop is cut out
+  when the file is saved. In Archive mode `RAW/` always keeps the whole frame (so the whole
+  frame is scanned) and only `Positive/` is cropped. A frame scanned as a crop is not noted for
+  making a film profile, which needs whole frames. The crop belongs to that frame of that strip,
   turns with the frame, and is forgotten with the next strip. "Clear crop" removes it. A crop
   made after a frame was scanned applies to the next scan of it, not to the file already saved.
 - **Keys**: ← → ↑ ↓ look at another frame, X ticks it, ⌘A ticks all, Space enlarges, C crops,
@@ -114,8 +125,53 @@ open. The "?" on a box shows a short explanation of what is in it.
     to keep that focus and exposure for every preview and scan (like locking AE in Nikon Scan).
   - **Autofocus** / **Auto exposure**: either one on its own. "Pick" lets you click the big
     picture to choose the focus point. "Reset" goes back to focusing and exposing each frame on its own.
-  - With "Autofocus each frame once" (the default) the scanner focuses each frame one time, and
-    the lens is then left where it is for that frame's passes.
+  - See **How focusing works** just below for exactly when the scanner focuses.
+
+### How focusing works
+
+The thumbnail pass never focuses. Focusing happens only before a preview or a scan, and how
+often depends on the **Focus** setting (Focus & exposure box):
+
+- **Autofocus each frame once** (the default). The first time a frame is previewed or scanned,
+  the scanner focuses on it, and the app remembers that lens position for that frame. Every
+  later pass over the same frame (a second preview, the scan, multi-sample passes, the
+  Multi-Exposure pass, test-mode runs) uses that same position, and the lens is not even moved
+  when it is already there. Each frame gets its own focus, because film curls differently from
+  frame to frame. The remembered positions are forgotten, and every frame is focused again,
+  when a new strip's frames are found (Thumbnail, or a strip going in), after Eject, after
+  Reset, and when you pick or clear a focus point.
+- **Same focus for all frames**. Every frame uses one lens position: the one from the last
+  Autofocus or Calibrate. If there is none yet, each frame is focused once as above until
+  there is.
+- **Autofocus on every pass**. The scanner focuses again before every pass, even of the same
+  frame. Slowest; only useful when you suspect the film moves.
+- **Manual lens position**. No autofocus at all: every pass uses the number you type
+  (Autofocus fills it in for you each time you press it).
+
+The buttons, which act once, right away, on the frame you are looking at:
+
+- **Autofocus**: focuses that frame now. That frame keeps the result; with "each frame once"
+  the other frames still get their own focus. With "Same focus for all frames" this is the
+  focus every frame uses.
+- **Calibrate**: Autofocus and Auto exposure on that frame, then switches Focus to "Same focus
+  for all frames" (and exposure to the same), so the whole strip uses this one focus. Handy
+  for flat film in a slide holder; for curly negatives "each frame once" is usually better.
+- **Reset**: back to "Autofocus each frame once" and each frame exposed on its own; the
+  remembered focus is dropped, so frames are focused again.
+- **Pick** (Focus point): click the big picture where the scanner should focus, for example a
+  face or anything with clear detail, instead of the centre. It counts for every frame. "Clear"
+  goes back to the centre.
+
+**Cropped scans**: with "Scan only the cropped part", focusing is still done on the whole
+frame (at the focus point, or the frame's centre), the same as without a crop, and the scan of
+the crop uses that lens position. So a crop at the edge of the frame is in focus as well as the
+middle was. (Only "Autofocus on every pass" focuses on the crop itself: at the focus point when
+it is inside the crop, otherwise the crop's centre.) Re-developing a RAW file never focuses: it
+does not use the scanner.
+
+**Where you see it**: the Activity list says "frame N: autofocus" and then "focus focused, lens
+position 240" each time the scanner really focuses, and the line under the Focus & exposure
+buttons says what is set now.
 - **Rotate all 180°**: turns every preview and every saved scan.
 - **⟲ / ⟳** above the big picture: turn the frame you are looking at (or the ticked ones) by
   90°, on the screen and in the saved scan.
@@ -167,7 +223,10 @@ open. The "?" on a box shows a short explanation of what is in it.
 - **Archive mode**: saves two folders in the target folder. `RAW/` holds the untouched scan with
   the infrared as a 4th channel (RGBI, like SilverFast's archive files). `Positive/` holds the
   finished picture, inverted if it is a negative, with dust removed if ticked. Both come from
-  one pass, so a frame takes about half as long as it did with two passes.
+  one pass, so a frame takes about half as long as it did with two passes. Every RAW file now
+  also carries a note of how it was scanned (the film, the pass's exposures, the turn and crop),
+  so it can be developed again later without the scanner (see **Re-develop RAW files**). Files
+  scanned before this still re-develop, with a little less to go on (see that section).
 - **File names** are built in this order: prefix, scan date, picture number, roll number, e.g.
   `20261122_005_R001.tif`. The roll number is always there and is the number of the roll you
   are scanning. The prefix is empty unless you type one (`Trip_20261122_005_R001.tif`), and the
@@ -242,6 +301,10 @@ open. The "?" on a box shows a short explanation of what is in it.
 
   "Send a test" tries them. (The iMessage option is gone: a message to your own account does
   not ring your phone.)
+
+  These options live in `coolscan_app/notify.py`, which is optional and listed in `.gitignore`,
+  so it is never committed. Without that file the app runs as usual and the "Tell me" options
+  are hidden; put the file back and restart the app to get them again.
 - **Photo taken**: type a year (or year-month-day) and the files get that as their EXIF
   "date taken" and as the file's own date, so Apple Photos, Lightroom and Google Photos sort
   them by it. With only a year (`2005`), the files get the day and time of the scan in that
@@ -271,8 +334,8 @@ you choose otherwise under "Negatives saved as".
 
 ## Test mode
 
-For finding out what a setting really does on your film: one frame, scanned or worked out again
-with several sets of settings, each result saved under its own name so you can put them side by
+For finding out what a setting really does on your film: one frame, some frames or the whole
+strip, scanned or worked out again with several sets of settings, each result saved under its own name so you can put them side by
 side. It is a separate way of starting the app and does not appear on the ordinary screen:
 
 ```
@@ -281,20 +344,26 @@ source .venv/bin/activate
 python coolscan.py --test
 ```
 
+Test mode is optional and kept out of git, like `notify.py`: `coolscan_app/testmode.py`,
+`web/test.html`, `web/test.js` and the test results in `Tests/` are listed in `.gitignore`. Without
+those files the app runs as usual, and `--test` says test mode is not installed and opens the
+ordinary screen.
+
 The browser opens on the test page (http://127.0.0.1:8765/test). "Normal screen" at the top
 right goes to the ordinary screen, which works as always; the settings set there are the ones
 the runs start from.
 
-1. **Frame to test**: click the frame. (Thumbnail in the bar finds the frames if they are not
-   there yet.)
+1. **Frames to test**: every frame of a new strip starts ticked. Click a frame to untick or tick
+   it; **Whole strip** ticks them all, **Untick all** clears them. (Thumbnail in the bar finds the
+   frames if they are not there yet.)
 2. **Queue**: under "Add a run", leave everything on "As it is" to scan with the settings in
    use, or change one or more of: resolution, multi-sample, Multi-Exposure, dust removal on or
    off and by which method, grain reduction, restore faded colours, negative tone, colour of
-   negatives (film profile) and colour space. "Starts from" lets a run begin from one of your
+   negatives (film profile, or **Profile made from this strip**, see below) and colour space. "Starts from" lets a run begin from one of your
    saved settings instead of the settings in use. A label is optional; without one the run is
    named after what it changes ("dust removal off", "Slides, 1450 dpi"). The queue is kept
    between starts of the app, up to 40 runs.
-3. **Run the queue**, then look at **Results**: each run shows the whole frame, a piece of it at
+3. **Run the queue** (the button says how many runs on how many frames), then look at **Results**: each run shows the whole frame, a piece of it at
    full size (one pixel of the scan to one pixel of the screen), how long it took and what the
    time went on, and the files it saved. Click a spot on any whole frame and every result shows
    that spot at full size; click a piece to see it larger. Stop ends the queue after the step
@@ -310,15 +379,46 @@ What to know:
   run". Tick **Own scan** when you want a run to scan again anyway, for example to see how much
   two passes of the same frame differ. The frame is focused once and every pass of the test
   uses that lens position.
-- **Where the results go**: a new folder for every test inside the target folder,
+- **Where the results go**: a new folder for every test in `Tests/` inside the app's own folder
+  (`~/Documents/GitHub/nikon_scan_project/Tests/`), not in your scans folder. `.gitignore` keeps
+  `Tests/` out of git, so test pictures are never committed. For example
   `Tests/20261123-101500 frame 3/`, holding `01 Settings in use.tif`, `02 dust removal off.tif`
   and so on (in `RAW/` and `Positive/` if a run is in Archive mode), plus `Test log.txt` with
   each run's settings, files and time. The infrared picture, when "Also save the infrared
   picture" is on, is saved once for a pass and not again for each run that shares it.
-- **Tests stay out of your roll.** Nothing is written into a roll folder, the roll's next
+- **Tests stay out of your roll.** Nothing is written into a roll folder or your scans folder, the roll's next
   number does not move, test frames are not measured for film profiles, and the ordinary
   screen keeps the picture it had. The settings in use are put back when the queue ends,
   whether it finished, was stopped or failed, and cannot be changed while it runs.
+- **Several frames**: the frames are done one after another, each with every run, so the
+  passes runs share are kept for one frame at a time. The folder is named for what was tested
+  (`Tests/20261123-101500 whole strip (6 frames)/`, `... frames 1, 3/`) and the files say the
+  frame first: `frame 03 - 02 multi-sample 4x.tif`. Results can be laid side by side as **each
+  frame with all its runs** or **each run over all frames**, and **Time per run** adds up every
+  run over all the frames, with its time a frame, so you see what a setting costs. A run that used
+  another run's pass says so: the scanning is counted with the run that took the pass. To time
+  multi-sample or Multi-Exposure against a plain scan, those runs need their own pass anyway, so
+  their totals hold the whole cost. Test log.txt ends with the same totals.
+- **Preview runs** (Kind of run: Preview): a run that makes a preview of the frame as the Preview
+  button does (whole frame, no infrared, no dust removal), at the preview resolution or the
+  Resolution the run sets, saved as a picture beside the others. Previews never share a pass,
+  because their time is what you are testing. With **Autofocus** On, the frame is focused again
+  for that run and the time it took is shown apart; Off leaves the lens where it is (no
+  focusing, so the picture is only as sharp as the lens already was). "As it is" focuses the way
+  the Focus setting says. Each result shows its time in large type first ("4.2 s · autofocus
+  1.6 s · scanning 2.4 s"), and **Time per run** gives every run's time a frame, its autofocus and
+  scanning times, and marks the fastest in bold. Autofocus now also shows in the time of an
+  ordinary scan ("autofocus 0:02, scanning 0:41").
+- **Profile made from this strip** (Colour of negatives, for colour negatives): test frames are not
+  measured for your rolls' film profiles, so this makes a temporary profile from the test's own
+  frames. Every frame is measured on its first whole pass; once all ticked frames are done, the
+  profile is made and the runs that asked for it are finished with it (their time adds "plus 0:02
+  for the strip's profile afterwards"). It needs at least 3 frames, and a whole strip is better.
+  With fewer, or on slides, those runs are saved with each frame on its own colour and say why.
+  While the test runs they wait in a hidden folder inside the test's folder, which is removed at
+  the end. If the test is stopped before the profile is made, the log says those files have each
+  frame on its own colour. The profile is not kept: to keep one, scan the roll and use
+  "Save this roll's film..." as usual.
 - **Turn and crop** of the frame apply to the test as they would to a scan of it.
 - A run that fails is marked and the queue goes on with the next; a lost scanner ends it.
 - A finished picture stretched "each frame on its own" changes all over when dust is removed,
@@ -327,6 +427,66 @@ What to know:
   screen before running the test: the files are then saved as scanned.
 - Full-resolution passes are large (about 90 MB each while a test runs, with the infrared).
   They are let go when the queue ends.
+
+## Re-develop RAW files
+
+Everything that happens after the scan — turning a negative into a positive, the colour of
+negatives, the tone, the colour space, colour restoration, grain reduction, turning, cropping
+and dust removal from the infrared — can be done again from a RAW file (Archive mode's untouched
+scan), with other settings, **without scanning again**. Open it from "Re-develop RAW files" at
+the top of the ordinary screen, or go to http://127.0.0.1:8765/develop.
+
+1. **RAW files**: pick a roll (its `RAW/` folder is found for you) or type a folder. Each file is
+   listed with the film it was scanned as, its size, and a note when it has no infrared (so no
+   dust removal) or no kept exposures (so film profiles cannot be used on it).
+2. **How to develop**: film, colour of negatives (each frame on its own, or a film profile), tone,
+   colour space, restore faded colours, grain reduction, and dust removal on or off (built-in, or
+   the Nikon ICE helper when it is set up). These are used for the pictures below and for every
+   file you develop. The driver's older dust method is not here: it works by scanning the film
+   again, which re-developing does not do.
+3. **Look**: one file shown four ways, to compare — **As scanned**, **Dust removed**, **Film
+   correction only**, and **Dust removed + film correction** (what is saved). Click a spot to see
+   it at full size in all four. Turn and crop here; the crop a frame was scanned with is where it
+   starts.
+4. **Save**: develops the ticked files (or all of them) into a new folder of its own,
+   `Re-developed/<date and time>/` inside the roll's folder, with the same names as the RAW files
+   and a `Develop log.txt`. "Also save the in-between steps" keeps the dust-removed-as-scanned file
+   and the no-dust-removal positive too, to compare. **Nothing is ever overwritten** — each run is
+   a new folder, and a name that is somehow taken gets a number.
+
+What to know:
+
+- A RAW file developed with the same settings it was scanned with comes out identical to the
+  `Positive/` file the scan made (so the feature changes nothing unless you ask it to).
+- **Film profiles need the pass's exposures.** New scans keep them (in the RAW file and in the
+  roll's `FilmColour.json`), so their RAW files can use a film profile. A file scanned before the
+  app kept them is developed with each frame on its own, and the page says so.
+- A file scanned before the app wrote the film type into RAW files is developed as the film set on
+  the scanning screen, and the page says so; pick the film on the page if it is wrong.
+- The second-pass dust method (the driver's) cannot be used here: it needs the scanner. Built-in
+  and Nikon ICE both work on the file's infrared and so are fine.
+
+## The Mac going to sleep
+
+A sleeping Mac drops the USB connection to the scanner, so a scan stops halfway. While the app
+is working on anything (thumbnail, preview, scan, a batch, the test queue, re-develop) it keeps
+the Mac awake with macOS's own `caffeinate` tool, and lets go 10 minutes after the last job, so
+the Mac is still awake when you feed the next strip. The first time, the Activity list says
+"the Mac will not go to sleep by itself while the app is working". The screen may still go
+dark; that does not matter.
+
+What this cannot stop:
+
+- **Closing the lid on battery** always puts the Mac to sleep. Keep the lid open while scanning.
+  On power, a Mac with its lid closed only stays awake with an external display attached.
+- Choosing Sleep from the Apple menu, or a low battery.
+
+If the Mac does sleep anyway, the Activity list says how long it slept. The app then checks the
+scanner. If the connection dropped, it says so and connects again by itself (up to three
+tries). The frame that was being scanned is not saved: scan it again. If reconnecting does not
+work, switch the scanner off and on and press Connect.
+
+With an app from before this change, start it as `caffeinate -i python coolscan.py` instead.
 
 ## When something goes wrong
 
@@ -344,6 +504,30 @@ brackets (send that part along if you report a problem).
 - **Hardware error**: switch the scanner off and on, then press Connect.
 
 ## Tested so far
+
+Added on 2026-11-23 (keeping the Mac awake), not run on the Mac or the scanner: tested in the
+cloud with a pretend `caffeinate` and the pretend scanner (26 checks in
+`tests/keepawake_test.py`): it starts once per run of jobs with `-i -s -m -w <app>`, stays on
+while jobs follow each other, lets go after the wait, notices a sleep from the clock jumping,
+gives the "the Mac went to sleep" message when the scanner drops after one, and connects again.
+Two things only the Mac can show: that macOS honours it during a long pass, and whether the
+LS-40 comes back by itself after a real sleep or needs switching off and on.
+
+Added on 2026-11-23, not run on the scanner or the Mac yet:
+
+- Scanning only the crop: nkscan's `scan_frame` scans exactly the rectangle it is given (its
+  CHANGELOG: "a crop, can be scanned on a perforation-framed unit"; it sets the scanner's SET WINDOW to it and puts it in the
+  LS-40's frame table first). Tested with the pretend scanner only (27 checks in
+  `tests/crop_scan_test.py`, and the page in a browser): the rectangle the driver gets, metering
+  on the whole frame, focus, infrared and dust removal on the crop, averaged passes,
+  Multi-Exposure, Archive mode and the option off. **The one thing only the scanner can show:
+  that the crop lands on the right part of the film.** Which way the picture's rows and columns
+  run on the film is taken from nkscan's documentation. If a cropped scan shows the wrong part
+  (mirrored, or another part of the frame), untick "Scan only the cropped part" and tell me.
+- The focus point: the app handed nkscan the point the wrong way round (across and down on
+  the picture, where nkscan takes along the sensor and along the feed). It now turns it the
+  way nkscan's documentation describes. Not tried on the scanner; a point near the centre of
+  the frame was barely affected before.
 
 Added on the night of 2026-11-22, none of it run on the scanner or on the Mac yet:
 
@@ -380,6 +564,18 @@ Added on the night of 2026-11-22, none of it run on the scanner or on the Mac ye
   to compare with. Using it for ordinary scans (not only Archive mode) is new and was tested
   with the pretend scanner only.
 
+
+Added on 2026-11-23, tested with the pretend scanner and a browser only, plus one real RAW scan
+from the Mac developed in the cloud:
+
+- Re-develop RAW files: 37 checks on the app and a run through its page in a browser (light and
+  dark mode), with the pretend scanner. What was checked: a RAW file now carries how it was
+  scanned (film, the pass's exposures, turn, crop); the four views differ in the right way; a file
+  developed with the settings of its scan comes out identical to the scan's `Positive/` file to
+  the last digit; nothing is overwritten (each run a new folder); older files with no note still
+  develop, and the page says what they can and cannot do; turning and cropping; saving the
+  in-between steps. On one real LS-40 RAW scan the dust removal rebuilt the same pixels it did
+  when scanning, and the four views came out as expected. **Not run on the scanner or the Mac.**
 
 Added late on 2026-11-22, tested with the pretend scanner and a browser only: scan times, the
 stall check (its reading of the driver's notes was tested on made-up lines in the driver's

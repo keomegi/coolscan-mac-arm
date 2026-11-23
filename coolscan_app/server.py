@@ -9,14 +9,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from . import app as app_module
 from .app import App
-from .notify import list_shortcuts
 
 ABOUT = "Coolscan: a small Mac app for Nikon Coolscan film scanners. It opens in your web browser."
 WEB = Path(__file__).resolve().parent / "web"   # the page; read from disk each time, so a browser reload shows an edit
 PAGE_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"),
-              "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+              "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+              "/develop": ("develop.html", "text/html; charset=utf-8"),
+              "/develop.js": ("develop.js", "text/javascript; charset=utf-8")}
 # the test page, only there when the app was started with --test
+def test_mode_installed():
+    """Test mode is optional (kept out of git): its module and both page files must be there."""
+    from . import app as app_module
+    return app_module.HAVE_TESTMODE and all((WEB / name).is_file() for name, _ in TEST_FILES.values())
+
+
 TEST_FILES = {"/test": ("test.html", "text/html; charset=utf-8"), "/test.js": ("test.js", "text/javascript; charset=utf-8")}
 
 
@@ -54,10 +62,19 @@ def make_handler(app):
                 if png:
                     return self._send(png, "image/png")
                 return self._send({"error": "not found"}, code=404)
+            if path.startswith(("/develop/view/", "/develop/piece/")) and path.endswith(".png"):
+                try:
+                    png = app.develop_png(path.rsplit("/", 1)[1][:-4], piece="/piece/" in path)
+                except (KeyError, ValueError, OSError):
+                    png = None
+                if png:
+                    return self._send(png, "image/png")
+                return self._send({"error": "not found"}, code=404)
             if path == "/api/state":
                 return self._send(app.state())
             if path == "/api/shortcuts":
-                return self._send({"names": list_shortcuts()})
+                n = app_module.notifier
+                return self._send({"names": n.list_shortcuts() if n else []})
             if path == "/thumb.png" and app.thumb_png:
                 return self._send(app.thumb_png, "image/png")
             if path.startswith(("/preview/", "/frame/")) and path.endswith(".png"):
@@ -95,7 +112,7 @@ def make_handler(app):
             }
             if app.test_mode:
                 if path == "/api/test/start":
-                    ok = app.run_job("test", lambda: app.run_tests(body.get("frame")))
+                    ok = app.run_job("test", lambda: app.run_tests(body.get("frames", body.get("frame"))))
                     return self._send({"ok": ok, "busy": not ok})
                 if path == "/api/test/runs":
                     if app.testing:
@@ -103,6 +120,22 @@ def make_handler(app):
                     return self._send(app.set_test_runs(body.get("runs")))
                 if path == "/api/test/crop":
                     return self._send(app.set_test_crop(body.get("x", 0.5), body.get("y", 0.5)))
+            if path.startswith("/api/develop/"):
+                if path == "/api/develop/look":
+                    ok = not app.dev["stale"] or app.run_job("re-develop preview", app.develop_look)
+                    return self._send({"ok": ok, "busy": not ok})
+                if path == "/api/develop/run":
+                    names = [str(n) for n in body.get("names") or []]
+                    ok = app.run_job("re-develop", lambda: app.develop_run(names))
+                    return self._send({"ok": ok, "busy": not ok})
+                if app.job == "re-develop" or (path == "/api/develop/folder" and app.job == "re-develop preview"):
+                    return self._send({"ok": False, "busy": True})
+                if path == "/api/develop/folder":
+                    return self._send(app.quick_job("looking for RAW files", lambda: app.develop_folder(
+                        body.get("roll"), body.get("path"))))
+                if path == "/api/develop/set":
+                    return self._send(app.develop_set(body))
+                return self._send({"error": "not found"}, code=404)
             if path in jobs:
                 name, fn = jobs[path]
                 ok = app.run_job(name, fn)
@@ -155,7 +188,9 @@ def make_handler(app):
             if path == "/api/switchroll":
                 return self._send(app.quick_job("changing roll", lambda: app.switch_roll(body.get("name"))))
             if path == "/api/notifytest":
-                if not app.notify("Test message. This is how you will hear that a strip is done."):
+                if app_module.notifier is None:
+                    app.say("messages are not installed: notify.py is not in the coolscan_app folder")
+                elif not app.notify("Test message. This is how you will hear that a strip is done."):
                     app.say("nothing to send to yet: tick the banner, name a shortcut or give an ntfy topic")
                 return self._send({"ok": True})
             if path == "/api/unlock":
@@ -208,6 +243,10 @@ def main():
         except ImportError:
             sys.exit("nkscan is missing. Turn the environment on (source .venv/bin/activate), "
                      "or install it with:  pip install nkscan numpy")
+    if args.test and not test_mode_installed():
+        print("Test mode is not installed here (it needs coolscan_app/testmode.py, web/test.html and web/test.js). "
+              "Starting the ordinary screen.")
+        args.test = False
     app = App(demo=args.demo)
     app.test_mode = bool(args.test)
     if not args.demo:

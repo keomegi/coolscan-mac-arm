@@ -26,7 +26,7 @@ function tile(i) { return (S && S.tiles && S.tiles[i]) || {}; }
 const keys = ['film', 'format', 'preview_dpi', 'invert_preview', 'rotate180', 'focus_mode', 'focus_position', 'exposure_mode',
   'white_balance', 'dpi', 'samples', 'ir', 'clean', 'negatives', 'archive', 'outdir', 'basename', 'digits', 'start', 'photo_date',
   'colour_space', 'name_date', 'tone', 'stop_on_errors', 'eject_after', 'scan_log', 'auto_thumbnail', 'dust_method', 'grain',
-  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure'];
+  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan'];
 keys.forEach(k => { const e = $('s-' + k); e.addEventListener('change', () => api('/api/settings', {[k]: e.type === 'checkbox' ? e.checked : e.value})); });
 
 // ---------------------------------------------------------------- film profiles: the colour of a film, measured from a roll
@@ -187,13 +187,31 @@ function openZoom() {
 }
 $('zoom').addEventListener('click', () => $('zoom').close());
 $('b-zoom').onclick = openZoom;
-$('big').addEventListener('dblclick', () => { if (!cropping && !picking) openZoom(); });
+$('imgw').addEventListener('dblclick', () => { if (!cropping && !picking) openZoom(); });  // on the picture or on its crop box
 
 function setCropping(on) { cropping = on; drag = null; if (on) setPicking(false); document.body.classList.toggle('cropping', on); $('b-crop').setAttribute('aria-pressed', String(on)); }
 $('b-crop').onclick = () => { setCropping(!cropping); render(true); };
 $('b-cropclear').onclick = async () => { if (cur !== null) { await api('/api/crop', {frame: cur, rect: null}); setCropping(false); } };
 function at(ev) { const r = $('big').getBoundingClientRect(), f = v => Math.min(1, Math.max(0, v)); return [f((ev.clientX - r.left) / r.width), f((ev.clientY - r.top) / r.height)]; }
-function dragRect() { return [Math.min(drag.a[0], drag.b[0]), Math.min(drag.a[1], drag.b[1]), Math.max(drag.a[0], drag.b[0]), Math.max(drag.a[1], drag.b[1])]; }
+function dragRect() {
+  if (drag.edit) return editRect();
+  return [Math.min(drag.a[0], drag.b[0]), Math.min(drag.a[1], drag.b[1]), Math.max(drag.a[0], drag.b[0]), Math.max(drag.a[1], drag.b[1])];
+}
+// changing a crop that is there: drag.edit is "move" or the side(s) held (n, s, e, w, nw, ...), drag.r the box as it was
+const MIN_CROP = 0.05;  // the smallest crop the app keeps, as a fraction of the frame
+function editRect() {
+  const r = drag.r.slice(), dx = drag.b[0] - drag.a[0], dy = drag.b[1] - drag.a[1], h = drag.edit;
+  if (h === 'move') {
+    const mx = Math.min(1 - r[2], Math.max(-r[0], dx)), my = Math.min(1 - r[3], Math.max(-r[1], dy));
+    return [r[0] + mx, r[1] + my, r[2] + mx, r[3] + my];
+  }
+  const f = v => Math.min(1, Math.max(0, v));
+  if (h.includes('w')) r[0] = Math.min(f(drag.r[0] + dx), r[2] - MIN_CROP);
+  if (h.includes('e')) r[2] = Math.max(f(drag.r[2] + dx), r[0] + MIN_CROP);
+  if (h.includes('n')) r[1] = Math.min(f(drag.r[1] + dy), r[3] - MIN_CROP);
+  if (h.includes('s')) r[3] = Math.max(f(drag.r[3] + dy), r[1] + MIN_CROP);
+  return r;
+}
 function cropOnScreen(t) {
   if (!t.crop) return null;
   const k = t.turns || 0, a = toScreen([t.crop[0], t.crop[1]], k), b = toScreen([t.crop[2], t.crop[3]], k);
@@ -204,18 +222,27 @@ const iw = $('imgw');
 iw.addEventListener('pointerdown', ev => {
   if (cur === null) return;
   if (picking) { setPicking(false); api('/api/settings', {focus_point: toScanner(at(ev), tile(cur).turns || 0)}); return; }
+  const box = $('cropbox'), held = ev.target.dataset && ev.target.dataset.h, shown = cropOnScreen(tile(cur));
+  if (shown && (held || ev.target === box)) {   // a side or corner of the crop, or its middle: change the crop that is there
+    ev.preventDefault(); iw.setPointerCapture(ev.pointerId);
+    drag = {edit: held || 'move', r: shown, a: at(ev), b: at(ev)};
+    document.body.classList.add('cropdrag'); return;
+  }
   if (!cropping) return;
   ev.preventDefault(); iw.setPointerCapture(ev.pointerId); drag = {a: at(ev), b: at(ev)}; placeCrop(dragRect());
 });
 iw.addEventListener('pointermove', ev => { if (drag) { drag.b = at(ev); placeCrop(dragRect()); } });
 iw.addEventListener('pointerup', async ev => {
   if (!drag) return;
-  drag.b = at(ev); const r = dragRect(), k = tile(cur).turns || 0; drag = null;
-  if (r[2] - r[0] < 0.05 || r[3] - r[1] < 0.05) { render(true); return; }   // a click, not a drag: the crop stays as it was
+  drag.b = at(ev); const r = dragRect(), k = tile(cur).turns || 0, edited = drag.edit, still = drag.a[0] === drag.b[0] && drag.a[1] === drag.b[1];
+  drag = null; document.body.classList.remove('cropdrag');
+  if (edited && still) { render(true); return; }   // a click on the crop: nothing changed
+  if (r[2] - r[0] < MIN_CROP || r[3] - r[1] < MIN_CROP) { render(true); return; }   // a click, not a drag: the crop stays as it was
   const a = toScanner([r[0], r[1]], k), b = toScanner([r[2], r[3]], k);
-  await api('/api/crop', {frame: cur, rect: [a[0], a[1], b[0], b[1]]}); setCropping(false);
+  await api('/api/crop', {frame: cur, rect: [a[0], a[1], b[0], b[1]]});
+  if (!edited) setCropping(false);
 });
-iw.addEventListener('pointercancel', () => { drag = null; render(true); });
+iw.addEventListener('pointercancel', () => { drag = null; document.body.classList.remove('cropdrag'); render(true); });
 
 // ---------------------------------------------------------------- keys
 document.addEventListener('keydown', ev => {
@@ -271,7 +298,9 @@ function drawTiles() {
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.setAttribute('aria-label', 'Scan frame ' + (i + 1));
       const num = document.createElement('span'); num.textContent = i + 1; lab.append(cb, num);
       d.append(pic, lab);
-      if (t.src === 'scan' || t.src === 'preview') { const b = document.createElement('span'); b.className = 'badge ' + t.src; b.textContent = t.src === 'scan' ? 'Scanned' : 'Preview'; d.appendChild(b); }
+      // a frame scanned as a crop only keeps its thumbnail on screen, but it was scanned all the same
+      const kind = t.src === 'thumbnail' && (t.saved || []).length ? 'scan' : t.src;
+      if (kind === 'scan' || kind === 'preview') { const b = document.createElement('span'); b.className = 'badge ' + kind; b.textContent = kind === 'scan' ? 'Scanned' : 'Preview'; d.appendChild(b); }
       box.appendChild(d);
     }
   }
@@ -306,8 +335,11 @@ function drawViewer(busy) {
   const sv = $('vsaved'), saved = t.saved || [];
   sv.hidden = !saved.length && !cropping && !t.crop;
   sv.textContent = cropping ? 'Drag on the picture to mark the part to save. The crop is used when this frame is scanned.'
+      + (t.crop ? ' Drag a side or corner of the box to change it, or its middle to move it.' : '')
     : [saved.length ? 'Saved from this frame: ' + saved.map(s => s.files.join(', ') + ' (' + clock(s.took) + ')').join(' · ') : '',
-       t.crop ? 'Cropped: only the marked part is saved (the RAW file of Archive mode keeps the whole frame).' : ''].filter(Boolean).join(' ');
+       t.crop ? (S.settings.archive ? 'Cropped: only the marked part is saved in Positive (Archive mode scans the whole frame, and its RAW file keeps it).'
+                 : S.settings.crop_scan ? 'Cropped: only the marked part is scanned and saved, which is quicker.'
+                 : 'Cropped: only the marked part is saved (the whole frame is scanned).') + ' Drag its sides or corners to change it.' : ''].filter(Boolean).join(' ');
 }
 
 function drawStrip() {
@@ -332,12 +364,13 @@ function drawSummaries(st) {
   $('sum-names').textContent = S.sample_name;
   $('sum-focus').textContent = st.focus_mode === 'same' || st.exposure_mode === 'same' ? 'kept from Calibrate' : 'each frame on its own';
   $('sum-preview').textContent = st.preview_dpi + ' dpi' + (st.auto_thumbnail ? ' · automatic' : '');
-  if (st.eject_after) on.push('eject'); if (st.notify_mac) on.push('banner'); if (st.notify_shortcut) on.push('shortcut'); if (st.notify_ntfy) on.push('ntfy');
+  if (st.eject_after) on.push('eject'); if (S.notify) { if (st.notify_mac) on.push('banner'); if (st.notify_shortcut) on.push('shortcut'); if (st.notify_ntfy) on.push('ntfy'); }
   $('sum-done').textContent = on.join(' · ');
 }
 
 function render(force) {
   if (!S) return;
+  $('notifyopts').hidden = $('notifyhelp').hidden = !S.notify;
   const st = S.settings, c = S.caps, busy = !!S.job;
   // ticks and the frame looked at belong to one strip: another strip, or fewer frames, and they go
   if (S.strip !== lastStrip) { if (lastStrip !== null) { sel.clear(); anchor = null; cur = null; setCropping(false); setPicking(false); } lastStrip = S.strip; }
@@ -365,7 +398,7 @@ function render(force) {
   $('mehint').textContent = st.samples > ms ? 'Left out while multi-sample averages passes: choose one of the two.' : 'A second pass exposed ' + st.multi_exposure + ' times longer: each frame takes at least twice as long. Not tried on the real scanner yet.';
   const fmts = c && c.film_formats ? c.film_formats : []; $('fmtrow').hidden = !fmts.length;
   fillSelect('s-format', [''].concat(fmts), st.format, v => v || 'From holder');
-  $('negrow').hidden = !!st.archive; $('dustrow').hidden = !st.clean;
+  $('negrow').hidden = !!st.archive; $('cropscanrow').hidden = !!st.archive; $('dustrow').hidden = !st.clean;
   const iceopt = $('s-dust_method').querySelector('option[value=ice]'); iceopt.hidden = iceopt.disabled = !S.ice_helper;
 
   for (const id of ['b-load', 'b-eject', 'b-thumb', 'b-preview', 'b-cal', 'b-af', 'b-ae', 'b-unlock', 'b-scan', 'b-connect', 'b-newroll', 'b-rollok',

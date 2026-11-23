@@ -80,20 +80,33 @@ class ScanMixin:
         import datetime
         return datetime.datetime(y, m, d, 12, 0, 0) + datetime.timedelta(seconds=n)
 
-    def _positive(self, planes, nikon_icc, exposures=None):
+    def _develop_how(self):
+        """How a scan is turned into the finished picture, as the settings have it now (see _positive)."""
+        st = self.settings
+        return {"film": self._film(), "tone": st["tone"], "profile": self._film_profile(),
+                "colour_space": st["colour_space"], "restore": int(st["restore"]), "grain": int(st["grain"])}
+
+    def _positive(self, planes, nikon_icc, exposures=None, how=None):
         """The finished picture in the chosen colour space, and the profile to embed.
 
         Slides go through Nikon's scanner profile into the colour space. Negatives
         are inverted first; that result is sRGB-like, so it is converted from sRGB.
         "Scanner RGB" keeps Nikon's profile on slides, and labels negatives sRGB.
+        `how` (film, tone, profile, colour_space, restore, grain) is the settings in use unless given:
+        re-developing a RAW file brings its own.
         """
-        space = self.settings["colour_space"]
-        restore, grain = int(self.settings["restore"]), int(self.settings["grain"])
+        if how is None and getattr(self, "test_hold", False) and self._film() == "negative" and len(planes) == 3:
+            # test mode, "film profile from this strip": kept until every frame of the test is measured;
+            # what is saved now (each frame on its own) is replaced with the profile's colours then
+            self._test_hold(planes, exposures, self._develop_how())
+        how = how or self._develop_how()
+        space = how["colour_space"]
+        restore, grain = int(how["restore"]), int(how["grain"])
         if restore or grain:
             self.say(" and ".join(n for n, on in (("colour restoration", restore), ("grain reduction", grain)) if on)
                      + " on this frame")
-        if self._film() in ("negative", "mono"):
-            pos = invert_negative(planes, self.settings["tone"], self._film_profile(), exposures)
+        if how["film"] in ("negative", "mono"):
+            pos = invert_negative(planes, how["tone"], how["profile"], exposures)
             pos = reduce_grain(restore_colour(pos, restore), grain, self._progress)
             pos = [(v * 65535 + 0.5).astype(np.uint16) for v in pos]
             if space not in COLOUR_SPACES:
@@ -214,8 +227,8 @@ class ScanMixin:
     def _frame_times_text(self, took):
         """How long a frame took, in words, and (when the driver said) whether the scanner had to wait."""
         t = self.frame_times
-        parts = [f"{name} {clock(t[key])}" for key, name in (("scan", "scanning"), ("clean", "dust removal")) if t.get(key)]
-        rest = took - sum(t.get(key, 0) for key in ("scan", "clean"))
+        parts = [f"{name} {clock(t[key])}" for key, name in (("focus", "autofocus"), ("scan", "scanning"), ("clean", "dust removal")) if t.get(key)]
+        rest = took - sum(t.get(key, 0) for key in ("focus", "scan", "clean"))
         if parts and rest >= 1:
             parts.append(f"the rest {clock(rest)}")
         words = clock(took) + (f" ({', '.join(parts)})" if parts else "")
@@ -284,7 +297,11 @@ class ScanMixin:
         if want > max(1, int(getattr(self.caps, "max_samples", 1) or 1)):
             passes, want = min(want, 4), 1  # the scanner reads a line once: average whole passes instead
         base = dict(dpi=int(st["dpi"]), samples=want, progress=self._progress)
-        opts = self._scan_options(s, i, d.frames[i], infrared)
+        # with a crop (and not in Archive mode) the scanner reads only the crop: see _scan_rect
+        frame, windowed = self._scan_rect(i, d.frames[i], job["archive"])
+        if windowed:
+            self.say(f"frame {i + 1}: scanning only the cropped part")
+        opts = self._scan_options(s, i, d.frames[i], infrared, frame)
         method = self._dust_method() if clean else None
         longer = int(st["multi_exposure"] or 0)
         if longer not in (2, 4):
@@ -297,10 +314,10 @@ class ScanMixin:
 
         def take_now(**kw):
             if longer:
-                return self._multi_exposed(s, i, d.frames[i], longer, kw, base, opts)
+                return self._multi_exposed(s, i, frame, longer, kw, base, opts)
             if passes == 1:
-                return self._driver_scan(s, d.frames[i], **kw, **base, **opts)
-            return self._averaged(s, i, d.frames[i], passes, kw, base, opts)
+                return self._driver_scan(s, frame, **kw, **base, **opts)
+            return self._averaged(s, i, frame, passes, kw, base, opts)
 
         def take(**kw):
             cache = self.test_pass_cache
@@ -309,7 +326,8 @@ class ScanMixin:
             # test mode: runs that need the same kind of pass over the frame share one, so that only
             # what the runs do differently shows in the results (and in their times)
             def key_for(**how):
-                return (i, base["dpi"], want, passes, longer, repr(sorted(opts.items())), tuple(sorted(how.items())))
+                return (i, tuple(frame), base["dpi"], want, passes, longer, repr(sorted(opts.items())),
+                        tuple(sorted(how.items())))
             key = key_for(**kw)
             hit = cache.get(key)
             if hit is None and not kw.get("infrared"):
@@ -342,7 +360,8 @@ class ScanMixin:
             r = take(infrared=True, clean=False)
             raw = as_scanned(r)
             planes4 = turned(raw) + ([self._rot(r.ir, i)] if r.ir is not None else [])
-            write_tiff(raw_dir / f"{stem}.tif", planes4, r.dpi, icc, meta=meta)
+            write_tiff(raw_dir / f"{stem}.tif", planes4, r.dpi, icc,
+                       meta={**meta, "coolscan": self._scan_note(i, r, planes4[0].shape)})
             saved.append(f"RAW/{stem}.tif")
             self.say(f"saved RAW/{stem}.tif" + ("" if r.complete else " (warning: pass came back short)"))
             if r.ir is None:
@@ -354,7 +373,7 @@ class ScanMixin:
                 self.say(f"saved RAW/{stem}_IR.tif")
             finished = raw
             if method == "pass":
-                finished = self.second_pass(s, i, d.frames[i], r, base, opts, as_scanned)
+                finished = self.second_pass(s, i, frame, r, base, opts, as_scanned)
             elif method:
                 finished = self.clean_planes(raw, r.ir, r.dpi, i)
             self._measure_colour(stem, finished, r)
@@ -375,33 +394,66 @@ class ScanMixin:
         if method and not in_pass:
             planes = self.clean_planes(planes, r.ir, r.dpi, i)
         whole = planes
-        self._measure_colour(stem, whole, r)
-        planes = self._cropped(i, turned(planes))
+        if windowed:
+            # the pass is the crop already. Its colours are not noted for a film profile: a profile
+            # is measured on whole frames, and a crop leaves out film the frame has
+            planes = turned(planes)
+        else:
+            self._measure_colour(stem, whole, r)
+            planes = self._cropped(i, turned(planes))
         note = "" if r.complete else " (warning: the pass came back short)"
         negative = self._film() in ("negative", "mono")
         if negative and st["negatives"] in ("negative", "both"):
             raw_name = f"{stem}.tif" if st["negatives"] == "negative" else f"{stem}_negative.tif"
-            write_tiff(outdir / raw_name, planes, r.dpi, icc, meta=meta)  # with Nikon's profile
+            write_tiff(outdir / raw_name, planes, r.dpi, icc,  # with Nikon's profile
+                       meta={**meta, "coolscan": self._scan_note(i, r, None)})
             saved.append(raw_name)
-            self.say(f"saved {raw_name}{note}")
+            self.say(f"saved {raw_name}{note}" + self._crop_words(i, planes, windowed))
         if not negative or st["negatives"] in ("positive", "both"):
             pos, pos_icc = self._positive(planes, icc, getattr(r, "exposures", None))
             write_tiff(outdir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": srgb_tag(pos_icc)})
             saved.append(f"{stem}.tif")
             self.say(f"saved {stem}.tif ({st['colour_space'] if st['colour_space'] in COLOUR_SPACES else 'scanner RGB'}){note}"
-                     + self._profile_words(r) + self._crop_words(i, pos))
+                     + self._profile_words(r) + self._crop_words(i, pos, windowed))
         if r.ir is not None and ir_file():
-            write_tiff(outdir / f"{stem}_IR.tif", self._cropped(i, [self._rot(r.ir, i)]), r.dpi, meta=meta)
+            ir_planes = [self._rot(r.ir, i)]
+            write_tiff(outdir / f"{stem}_IR.tif", ir_planes if windowed else self._cropped(i, ir_planes), r.dpi, meta=meta)
             saved.append(f"{stem}_IR.tif")
             self.say(f"saved {stem}_IR.tif")
         if r.cleaned is not None:
             self.say(f"dust removal rebuilt {r.cleaned} pixels")
-        self._show_scan(i, whole, r, saved[0] if saved else "", planes)
+        self._show_scan(i, whole, r, saved[0] if saved else "", planes, windowed)
+
+    def _scan_note(self, i, r, shape):
+        """What a file as scanned keeps about how it was made, so it can be developed again later
+        without the scanner: the film, the pass's exposures (a film profile needs them), and, for a
+        file of the whole frame (`shape` given), how it was turned and the crop asked for then."""
+        note = {"app": "Coolscan", "film": self._film(), "dpi": int(r.dpi or 0),
+                "exposures": {str(k): int(v) for k, v in dict(getattr(r, "exposures", None) or {}).items()},
+                "turns": self._turns(i), "scanned": time.strftime("%Y-%m-%d %H:%M:%S"), "roll": self.settings["roll"]}
+        pos = getattr(r, "focus_position", None)
+        if pos is not None:
+            note["focus_position"] = int(pos)
+        if shape is not None:
+            box = self._crop_box(i, shape)
+            if box is not None:  # as fractions of the file, the way it is stored (already turned)
+                r0, r1, c0, c1 = box
+                rows, cols = shape
+                note["crop"] = [round(c0 / cols, 4), round(r0 / rows, 4), round(c1 / cols, 4), round(r1 / rows, 4)]
+        else:
+            note["cropped"] = bool(self.crops.get(i))
+        return note
 
     def _measure_colour(self, stem, planes, r):
         """Note what this frame's film measured, for making a film profile from the roll later."""
-        if self._film() != "negative" or len(planes) != 3 or self.testing:
-            return  # (a test run is not part of the roll)
+        if self._film() != "negative" or len(planes) != 3:
+            return
+        if self.testing:  # a test run is not part of the roll; its frames are measured for the test alone
+            try:
+                self._test_measure(planes, r)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            return
         try:
             self._note_colour(stem, frame_colour(planes, getattr(r, "exposures", None)), getattr(r, "exposures", None))
         except Exception:  # noqa: BLE001 - an extra: the scan itself must go on
@@ -415,19 +467,29 @@ class ScanMixin:
             return ", film profile not used (the pass has no exposures)"
         return f', film profile "{self.settings["film_profile"]}"'
 
-    def _crop_words(self, i, planes):
+    def _crop_words(self, i, planes, windowed=False):
         if not self.crops.get(i):
             return ""
         rows, cols = planes[0].shape
-        return f", cropped to {cols}x{rows} px"
+        return f", cropped to {cols}x{rows} px" + (" (only that part was scanned)" if windowed else "")
 
-    def _show_scan(self, i, planes, r, name, saved_planes):
+    def _show_scan(self, i, planes, r, name, saved_planes, windowed=False):
         """After a frame is saved, the screen shows the scan itself in place of the thumbnail or preview."""
         if self.testing:
             return  # a test run is not a scan of the roll: the ordinary screen keeps what it showed
         try:
-            names = ("red", "green", "blue") if len(planes) == 3 else ("gray",)
             rows, cols = saved_planes[0].shape
+            if windowed:
+                # the pass holds only the crop. The picture on screen stays the whole frame it was
+                # cut from, so the crop box still sits where it was drawn and can be changed
+                was = {"thumbnail": "thumbnail", "preview": "preview scan", "scan": "earlier scan"}.get(
+                    self.frame_source.get(i), "earlier picture")
+                self.preview_info[i] = (f"saved as {name}, {cols}x{rows} px at {r.dpi} dpi, cropped. Only the crop "
+                                        f"was scanned, so the picture here is still the {was}")
+                with self.lock:
+                    self.version += 1
+                return
+            names = ("red", "green", "blue") if len(planes) == 3 else ("gray",)
             self._show(i, {n: shrink(p) for n, p in zip(names, planes)}, "scan",
                        f"saved as {name}, {cols}x{rows} px at {r.dpi} dpi" + (", cropped" if self.crops.get(i) else ""),
                        exposures=getattr(r, "exposures", None))
@@ -529,50 +591,52 @@ class ScanMixin:
             exposures=first.exposures, complete=first.complete, cleaned=None,
             focused=first.focused, focus_position=first.focus_position)
 
-    def clean_planes(self, planes, ir, dpi, i):
+    def clean_planes(self, planes, ir, dpi, i, film=None, who=None, method=None):
         """Dust and scratch removal on a finished pass, as scanned. Returns the cleaned planes.
 
         The built-in cleaner (dust.py) runs here on the scan in memory, so the
         untouched scan can be kept as well. The Nikon ICE helper is used instead
-        when it is there and chosen.
+        when it is there and chosen. `film` and `who` (words for the log) are for re-developing.
         """
+        film = film or self._film()
+        who = who or f"frame {i + 1}"
         if ir is None or len(planes) != 3:
-            self.say(f"frame {i + 1}: dust removal needs red, green, blue and infrared; left as scanned")
+            self.say(f"{who}: dust removal needs red, green, blue and infrared; left as scanned")
             return planes
-        if self._dust_method() == "ice":
+        if (method or self._dust_method()) == "ice" and self.ice_ready:
             try:
-                return self._ice_clean(planes, ir, dpi, i)
+                return self._ice_clean(planes, ir, dpi, who, film)
             except Exception as e:  # noqa: BLE001 - any trouble with the helper: carry on without it
                 reason = "it took too long" if type(e).__name__ == "TimeoutExpired" else str(e)
-                self.say(f"frame {i + 1}: the Nikon ICE helper failed ({reason}); using the built-in dust removal")
+                self.say(f"{who}: the Nikon ICE helper failed ({reason}); using the built-in dust removal")
         started = time.time()
         try:
-            result = dust_clean(planes, ir, dpi, negative=self._film() in ("negative", "mono"),
+            result = dust_clean(planes, ir, dpi, negative=film in ("negative", "mono"),
                                 progress=self._progress)
         except Cancelled:
             raise
         except Exception as e:  # noqa: BLE001 - never lose the picture over the cleaning
             traceback.print_exc()
-            self.say(f"frame {i + 1}: WARNING, dust removal failed ({type(e).__name__}: {e}); "
+            self.say(f"{who}: WARNING, dust removal failed ({type(e).__name__}: {e}); "
                      f"this picture is saved as scanned, with the dust still on it")
             return planes
         if result is None:
-            self.say(f"frame {i + 1}: no clear film to measure the infrared against; dust removal skipped")
+            self.say(f"{who}: no clear film to measure the infrared against; dust removal skipped")
             return planes
         cleaned, count = result
         self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
-        self.say(f"frame {i + 1}: dust removal rebuilt {count} pixels in {time.time() - started:.0f} s")
+        self.say(f"{who}: dust removal rebuilt {count} pixels in {time.time() - started:.0f} s")
         return cleaned
 
-    def _ice_clean(self, planes, ir, dpi, i):
+    def _ice_clean(self, planes, ir, dpi, who, film):
         import tempfile
-        self.say(f"frame {i + 1}: dust removal by the Nikon ICE helper")
+        self.say(f"{who}: dust removal by the Nikon ICE helper")
         started = time.time()
         with tempfile.TemporaryDirectory(prefix="coolscan-ice-") as tmp:
             src, dst = Path(tmp) / "input.tif", Path(tmp) / "output.tif"
             write_tiff(src, list(planes) + [ir], dpi)
             product = (getattr(self.caps, "product", None) or "").strip()
-            run = subprocess.run(self._ice_cmd() + [str(src), str(dst), "--film", self._film(),
+            run = subprocess.run(self._ice_cmd() + [str(src), str(dst), "--film", film,
                                   "--dpi", str(int(dpi)), "--model", product],
                                  capture_output=True, text=True, timeout=ICE_TIMEOUT)
             if run.returncode != 0:
@@ -582,7 +646,7 @@ class ScanMixin:
         if cleaned[0].shape != planes[0].shape:
             raise RuntimeError("its picture has a different size")
         self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
-        self.say(f"frame {i + 1}: Nikon ICE finished in {time.time() - started:.0f} s")
+        self.say(f"{who}: Nikon ICE finished in {time.time() - started:.0f} s")
         return cleaned
 
     def second_pass(self, s, i, frame, raw_result, base, opts, as_scanned):

@@ -12,6 +12,8 @@
 <button id="b-preview" title="A quick, sharper look than the thumbnail (P)">Preview</button>
 <button class="primary" id="b-scan" title="Scan and save (⌘ Return)">Scan all frames</button>
 <button id="b-stop" disabled title="Stop after the current step">Stop</button>
+<span class="gap"></span>
+<a class="pagelink" href="/develop" title="Make the finished pictures again from RAW files, with other settings, without scanning">Re-develop RAW files</a>
 </div>
 <div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span><span id="timing"></span></div>
 </header>
@@ -71,12 +73,13 @@
 
 <details class="card" id="g-save" open><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <label class="row"><span>Archive mode (RAW + Positive)</span><input type="checkbox" id="s-archive"></label>
+<label class="row" id="cropscanrow"><span>Scan only the cropped part</span><input type="checkbox" id="s-crop_scan"></label>
 <label class="row" id="negrow"><span>Negatives saved as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
 <label class="row"><span>Also save the infrared picture</span><input type="checkbox" id="s-ir"></label>
 <label class="row"><span>Folder</span><input type="text" id="s-outdir"></label>
-<p class="help" id="archint">Archive mode saves two folders from one pass: RAW (the untouched scan with the infrared as a 4th channel) and Positive (the finished picture, dust removed if ticked). The infrared picture is an extra file ending in _IR.tif that shows only the dust and scratches; dust removal works the same with it unticked. All files are 16-bit TIFF.</p>
+<p class="help" id="archint">Archive mode saves two folders from one pass: RAW (the untouched scan with the infrared as a 4th channel) and Positive (the finished picture, dust removed if ticked). With "Scan only the cropped part" a cropped frame is scanned as just that part, which is quicker because less film is stepped over and less data crosses the scanner's slow USB link; unticked, the whole frame is scanned and the crop is cut out when the file is saved. Archive mode always scans the whole frame so its RAW file keeps it. The infrared picture is an extra file ending in _IR.tif that shows only the dust and scratches; dust removal works the same with it unticked. All files are 16-bit TIFF.</p>
 </div></details>
 
 <details class="card" id="g-names"><summary>File names<span class="sum" id="sum-names"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
@@ -100,6 +103,7 @@
 <label class="row"><span>Exposure</span><select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
 <label class="row"><span>White balance</span><select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
 <p class="help">The buttons act once, right away, on the frame you are looking at. Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame; Reset undoes that. "Pick" lets you click the big picture to choose where the scanner focuses.</p>
+<p class="help"><b>When the scanner focuses.</b> Never during the thumbnail pass. With <i>Autofocus each frame once</i> (the default) it focuses each frame the first time that frame is previewed or scanned, and every later pass of that frame (the scan, multi-sample, Multi-Exposure) reuses that lens position. Frames are focused again after a new strip, Eject, Reset, or a new focus point. <i>Same focus for all frames</i> uses the last Autofocus or Calibrate for every frame. <i>Autofocus on every pass</i> focuses before each pass. <i>Manual</i> never focuses. The Autofocus button focuses only the frame you are looking at; Calibrate also switches to the same focus for all frames. A cropped scan is focused on the whole frame (at the focus point, or its centre), then only the crop is scanned. The Activity list says each time the scanner really focuses.</p>
 </div></details>
 
 <details class="card" id="g-preview"><summary>Thumbnail &amp; preview<span class="sum" id="sum-preview"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
@@ -112,12 +116,14 @@
 <label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
 <label class="row"><span>Stop at the first frame that fails</span><input type="checkbox" id="s-stop_on_errors"></label>
 <label class="row"><span>Write a scan log</span><input type="checkbox" id="s-scan_log"></label>
+<div id="notifyopts" hidden>
 <div class="sub">Tell me</div>
 <label class="row"><span>Banner on this Mac</span><input type="checkbox" id="s-notify_mac"></label>
 <label class="row"><span>Run a shortcut</span><input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
 <label class="row"><span>ntfy topic</span><input type="text" id="s-notify_ntfy" placeholder="optional"></label>
 <div class="btnrow"><button id="b-notifytest">Send a test</button></div>
-<p class="help">If a frame fails (for example autofocus), the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder. "Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you. ntfy is a free phone app that needs no shortcut.</p>
+</div>
+<p class="help">If a frame fails (for example autofocus), the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder. <span id="notifyhelp" hidden>"Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you. ntfy is a free phone app that needs no shortcut.</span></p>
 </div></details>
 </aside>
 
@@ -136,7 +142,7 @@
 <button class="icon" id="b-rl" title="Turn 90° left ( [ )" aria-label="Turn left">⟲</button><button class="icon" id="b-rr" title="Turn 90° right ( ] )" aria-label="Turn right">⟳</button>
 <button id="b-crop" aria-pressed="false" title="Drag on the picture to choose the part that is saved (C)">Crop</button><button id="b-cropclear" hidden>Clear crop</button>
 <button id="b-zoom" title="Enlarge (Space, or double-click the picture)">Enlarge</button></div>
-<div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden></div><div class="mark" id="fmark" hidden></div></div>
+<div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden title="Drag a side or corner to change the crop, or the middle to move it"><i class="h n" data-h="n"></i><i class="h s" data-h="s"></i><i class="h e" data-h="e"></i><i class="h w" data-h="w"></i><i class="h nw" data-h="nw"></i><i class="h ne" data-h="ne"></i><i class="h sw" data-h="sw"></i><i class="h se" data-h="se"></i></div><div class="mark" id="fmark" hidden></div></div>
 <p class="hint" id="vempty">Click a frame above to see it here.</p></div>
 <p class="hint" id="vsaved" hidden></p>
 <p class="hint" id="keyhint">Keys: ← → look at the next frame · X tick it for scanning · Space enlarge · C crop · [ ] turn · ⌘A tick all · ⌘Return scan</p>

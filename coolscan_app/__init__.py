@@ -5,7 +5,7 @@ The parts:
   colour     negative to positive, pictures for the screen, colour spaces and profiles
   dust       dust and scratch removal from the infrared picture
   enhance    grain reduction, faded-colour restoration, lining passes up
-  notify     telling the person a strip is done (banner, shortcut, ntfy)
+  notify     optional, kept out of git: telling the person a strip is done (banner, shortcut, ntfy)
   driver     what the driver notes about a pass, and its failures in plain words
   demo       a pretend scanner for trying the screens
   settings   the settings and how they are kept between runs
