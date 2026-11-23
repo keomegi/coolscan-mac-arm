@@ -133,6 +133,36 @@ def restore_colour(planes, strength):
 # that reads it once (the LS-40) gets the same effect from whole passes taken at
 # one focus and exposure and averaged, as long as the passes land on each other.
 
+def merge_exposures(short, long, factor):
+    """One plane from two passes over the same frame, the second exposed `factor` times longer.
+
+    The longer pass reads dense film (the shadows of a slide, the highlights of a negative) well
+    clear of the scanner's noise, and burns out on thin film. So the result takes the longer pass
+    wherever it stays under about three quarters of full scale, the normal pass where the longer
+    one nears its ceiling, and a mix in between. The longer pass is brought down to the normal
+    one's scale by what the two passes actually measure against each other (not by `factor`
+    alone, since the lamp and the black level are never exact).
+
+    Returns (merged plane uint16 on the normal pass's scale, share taken from the longer pass),
+    or None when the passes do not fit together: then the caller keeps the normal pass.
+    """
+    if short.shape != long.shape:
+        return None
+    top = 65535.0
+    step = max(1, int(math.sqrt(short.size / 500_000)))
+    ss, ll = short[::step, ::step].astype(np.float64), long[::step, ::step].astype(np.float64)
+    ok = (ll > 0.10 * top) & (ll < 0.75 * top)
+    if int(ok.sum()) < 1000:
+        return None  # the longer pass is burnt out (or black) nearly everywhere: nothing to gain
+    gain, offset = np.polyfit(ll[ok], ss[ok], 1)
+    if not 0.6 / factor < gain < 1.6 / factor:
+        return None  # the second pass is not about `factor` times brighter: something went wrong with it
+    lf = long.astype(np.float32)
+    weight = np.clip((np.float32(0.90 * top) - lf) / np.float32(0.15 * top), 0, 1)
+    merged = weight * (np.float32(gain) * lf + np.float32(offset)) + (1 - weight) * short.astype(np.float32)
+    return np.clip(merged + 0.5, 0, top).astype(np.uint16), float(weight.mean())
+
+
 def pass_shift(a, b, tile=256):
     """How far pass b sits from pass a, in pixels, at the worst of nine spots.
 

@@ -1,11 +1,15 @@
 """File names, roll folders and film descriptions."""
 
+import json
 import os
 import re
 import time
 from pathlib import Path
 
+from .colour import FILM_PROFILE_LEAST, film_profile_from
+
 DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll's folder
+COLOUR_FILE = "FilmColour.json"         # what each scanned frame's film measured, kept in each roll's folder
 ASIDE_FOLDER = "Earlier rolls"          # where older roll folders go when their number is taken over
 _NAME_END = re.compile(r"(?:_IR|_negative)?\.tiff?$", re.I)   # how a saved picture's name ends
 _NAME_ROLL = re.compile(r"(?:_\d{8})?_R\d{2,3}$")              # the roll number before that, if any
@@ -126,6 +130,11 @@ class RollsMixin:
         self._remember_roll()
         for k in ("film_brand", "film_stock", "film_iso", "film_notes"):
             st[k] = str(details.get(k, "")).strip()
+        if st["film_profile"]:
+            # the next roll may be another film, and another film's profile would colour it wrongly
+            self.say(f'film profile "{st["film_profile"]}" is switched off for the new roll; '
+                     f"pick it again under Film if this roll is the same film")
+            st["film_profile"] = ""
         st["film_description"] = self._tidy_text(details.get("film_description", ""))
         base = self._base()
         used = [self._roll_number(d.name) for d in base.glob("Roll *")] if base.is_dir() else []
@@ -161,7 +170,7 @@ class RollsMixin:
         """Keep the current roll's film details, so that going back to it later brings them back."""
         st = self.settings
         if st["roll"]:
-            st["rolls"][st["roll"]] = {k: st[k] for k in self._FILM_KEYS}
+            st["rolls"][st["roll"]] = {**{k: st[k] for k in self._FILM_KEYS}, "film_profile": st["film_profile"]}
 
     def switch_roll(self, name):
         """Carry on in a roll folder that is already there. Nothing is renamed or moved."""
@@ -178,10 +187,118 @@ class RollsMixin:
             known = {"film_notes": name.partition(" - ")[2].strip()}
         for k in self._FILM_KEYS:
             st[k] = str(known.get(k, "") or "")
+        profile = str(known.get("film_profile", "") or "")
+        st["film_profile"] = profile if profile in st["film_profiles"] else ""
         st["roll"], st["start"], st["film_description"] = name, 0, ""
         self.read_description()
         self.save_settings()
         self.say(f"back in {name}: the next picture gets number {self.next_number()}")
+        with self.lock:
+            self.version += 1
+        return {"ok": True}
+
+    # -- film profiles: the colour of a film, measured from the frames of a roll and kept under a name
+    def _roll_colour(self):
+        """What the current roll's scanned frames measured (file name -> numbers). Read once per roll."""
+        roll = self.settings["roll"]
+        if not roll:
+            return {}
+        folder = self._base() / roll
+        cache = getattr(self, "_colour_cache", None)
+        if cache is None or cache[0] != str(folder):
+            frames = {}
+            try:
+                data = json.loads((folder / COLOUR_FILE).read_text(encoding="utf-8"))
+                frames = {str(k): v for k, v in data["frames"].items() if isinstance(v, dict)}
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass
+            cache = self._colour_cache = (str(folder), frames)
+        return cache[1]
+
+    def _note_colour(self, stem, measured, exposures):
+        """Keep one scanned frame's measurement with its roll. Trouble here never stops a scan."""
+        if not measured:
+            return
+        try:
+            frames = self._roll_colour()
+            frames[stem] = {**measured, "exposures": {str(k): int(v) for k, v in dict(exposures or {}).items()}}
+            folder = self.roll_dir()
+            text = json.dumps({"about": "Coolscan: the film colour measured on each scanned frame of this roll "
+                                        "(densities with the exposure taken out). Film profiles are made from it.",
+                               "frames": frames}, indent=1)
+            tmp = folder / (COLOUR_FILE + ".part")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, folder / COLOUR_FILE)
+        except (OSError, ValueError, TypeError) as e:
+            if not getattr(self, "_colour_warned", False):
+                self._colour_warned = True
+                self.say(f"could not keep this frame's film colour for film profiles ({e}); scanning goes on")
+
+    def _film_profile(self):
+        """The film profile in use for colour negatives, or None (each frame on its own)."""
+        name = self.settings["film_profile"]
+        if not name or self._film() != "negative":
+            return None
+        profile = self.settings["film_profiles"].get(name)
+        return profile if isinstance(profile, dict) else None
+
+    def film_profiles(self):
+        """For the screen: the saved film profiles, by name."""
+        out = []
+        for name in sorted(self.settings["film_profiles"]):
+            p = self.settings["film_profiles"][name]
+            if isinstance(p, dict):
+                out.append({"name": name, "frames": p.get("frames"), "roll": p.get("roll"), "made": p.get("made")})
+        return out
+
+    def save_film_profile(self, name):
+        """Make a film profile from the frames scanned in the current roll, and keep it under `name`."""
+        name = " ".join(str(name or "").split())[:60]
+        if not name:
+            return {"ok": False, "error": "Give the film a name first, for example Kodak Gold 200."}
+        if self._film() != "negative":
+            return {"ok": False, "error": "Film profiles are for colour negatives."}
+        frames = list(self._roll_colour().values())
+        profile = film_profile_from(frames)
+        if profile is None:
+            if len(frames) < FILM_PROFILE_LEAST:
+                return {"ok": False, "error": f"This roll has {len(frames)} measured frame(s). A film profile needs at "
+                                              f"least {FILM_PROFILE_LEAST}, and a whole strip or more is better. "
+                                              f"Frames are measured when they are scanned (not previewed)."}
+            return {"ok": False, "error": "The frames of this roll are too alike to tell the film's colours from."}
+        profile.update(roll=self.settings["roll"], made=time.strftime("%Y-%m-%d"))
+        new = name not in self.settings["film_profiles"]
+        self.settings["film_profiles"][name] = profile
+        self.save_settings()
+        self.say((f'film profile "{name}" saved' if new else f'film profile "{name}" measured again')
+                 + f' from {profile["frames"]} frames of {self.settings["roll"]}')
+        with self.lock:
+            self.version += 1
+        return {"ok": True, "name": name, "frames": profile["frames"]}
+
+    def use_film_profile(self, name):
+        """Switch to a saved film profile, or with "" back to each frame on its own."""
+        name = str(name or "")
+        if name and name not in self.settings["film_profiles"]:
+            return {"ok": False, "error": "That film profile is not there any more."}
+        self.settings["film_profile"] = name
+        self._remember_roll()
+        self.save_settings()
+        self.say(f'colour of negatives: film profile "{name}"' if name else "colour of negatives: each frame on its own")
+        self.redraw()
+        return {"ok": True}
+
+    def delete_film_profile(self, name):
+        name = str(name or "")
+        if self.settings["film_profiles"].pop(name, None) is None:
+            return {"ok": False, "error": "That film profile is not there any more."}
+        was_used = self.settings["film_profile"] == name
+        if was_used:
+            self.settings["film_profile"] = ""
+        self.save_settings()
+        self.say(f'film profile "{name}" deleted' + (": negatives are converted each frame on its own again" if was_used else ""))
+        if was_used:
+            self.redraw()
         with self.lock:
             self.version += 1
         return {"ok": True}

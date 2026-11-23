@@ -149,6 +149,14 @@ def write_tiff(path, planes, dpi, icc=None, meta=None):
 
 def read_tiff_rgb16(path):
     """Read an uncompressed 16-bit RGB TIFF as three planes (what a cleaning helper hands back)."""
+    planes = read_tiff16(path)
+    if len(planes) < 3:
+        raise ValueError("expected an uncompressed 16-bit RGB TIFF")
+    return planes[:3]
+
+
+def read_tiff16(path):
+    """Read an uncompressed 16-bit TIFF as its planes: one (grey), three (RGB) or four (RGB and infrared)."""
     with open(path, "rb") as f:
         data = f.read()
     order = {b"II": "<", b"MM": ">"}.get(data[:2])
@@ -169,14 +177,14 @@ def read_tiff_rgb16(path):
         tags[tag] = struct.unpack(order + code * n, raw[:size * n])
     cols, rows = tags[256][0], tags[257][0]
     spp = tags.get(277, (1,))[0]
-    if tags.get(259, (1,))[0] != 1 or set(tags.get(258, (1,))) != {16} or spp < 3:
-        raise ValueError("expected an uncompressed 16-bit RGB TIFF")
+    if tags.get(259, (1,))[0] != 1 or set(tags.get(258, (1,))) != {16}:
+        raise ValueError("expected an uncompressed 16-bit TIFF")
     pixels = b"".join(data[o:o + c] for o, c in zip(tags[273], tags[279]))
     if len(pixels) < rows * cols * spp * 2:
         raise ValueError("the TIFF is cut short")
     a = np.frombuffer(pixels, order + "u2", rows * cols * spp)
     if tags.get(284, (1,))[0] == 2:  # one plane after the other
         a = a.reshape(spp, rows, cols)
-        return [a[k].astype(np.uint16) for k in range(3)]
+        return [a[k].astype(np.uint16) for k in range(spp)]
     a = a.reshape(rows, cols, spp)
-    return [np.ascontiguousarray(a[..., k]).astype(np.uint16) for k in range(3)]
+    return [np.ascontiguousarray(a[..., k]).astype(np.uint16) for k in range(spp)]

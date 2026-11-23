@@ -9,8 +9,9 @@ SETTINGS_FILE = Path.home() / ".coolscan.json"  # settings and the current roll,
 def default_settings():
     """What the app starts with the first time."""
     return {
-        "film": "negative", "format": "", "preview_mode": "scan", "preview_dpi": 290,
+        "film": "negative", "format": "", "preview_dpi": 290,
         "dpi": 2900, "samples": 1, "ir": True, "clean": True,
+        "multi_exposure": 0,  # 0 = off; 2 or 4 = a second pass exposed that many times longer, merged in
         "focus_mode": "frame", "focus_point": None, "focus_position": 0,
         "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
         "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
@@ -22,13 +23,69 @@ def default_settings():
         "roll": "", "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
         "film_description": "",
         "rolls": {},   # roll folder name -> its film details, so going back to a roll brings them back
+        "presets": {},  # name -> the scan settings saved under that name
+        "test_runs": [],        # test mode's queue: [{"label", "base", "changes", "rescan"}]
+        "film_profile": "",     # the film profile used for colour negatives; "" = each frame on its own
+        "film_profiles": {},    # name -> {"lo": [r, g, b], "hi": [r, g, b], "frames": n, "roll": ..., "made": ...}
     }
 
 
+# what a saved set of settings holds: how to scan and save, not where (folder, roll) or who to tell
+PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "multi_exposure", "ir", "clean", "dust_method", "grain", "restore",
+               "focus_mode", "exposure_mode", "white_balance", "invert_preview", "negatives", "archive",
+               "colour_space", "tone", "basename", "name_date", "digits", "stop_on_errors", "eject_after",
+               "scan_log", "auto_thumbnail", "film_profile")
+
+
 class SettingsMixin:
+    # -- saved settings: the scan settings kept under a name, to switch between kinds of film or work
+    def current_preset(self):
+        """The name of the saved settings that match what is set now, or None."""
+        st = self.settings
+        for name in sorted(st["presets"]):
+            values = st["presets"][name]
+            if isinstance(values, dict) and all(st.get(k) == v for k, v in values.items() if k in PRESET_KEYS):
+                return name
+        return None
+
+    def save_preset(self, name):
+        name = " ".join(str(name or "").split())[:60]
+        if not name:
+            return {"ok": False, "error": "Give the settings a name first."}
+        new = name not in self.settings["presets"]
+        self.settings["presets"][name] = {k: self.settings[k] for k in PRESET_KEYS}
+        self.save_settings()
+        self.say(f'settings saved as "{name}"' if new else f'saved settings "{name}" updated')
+        return {"ok": True, "name": name}
+
+    def load_preset(self, name):
+        values = self.settings["presets"].get(str(name or ""))
+        if not isinstance(values, dict):
+            return {"ok": False, "error": "Those saved settings are not there any more."}
+        for k in PRESET_KEYS:
+            if k in values and type(values[k]) is type(self.settings[k]):
+                self.settings[k] = values[k]
+        if self.settings["film_profile"] not in self.settings["film_profiles"]:
+            self.settings["film_profile"] = ""  # saved with a film profile that has been deleted since
+        self.save_settings()
+        self.redraw()
+        self.say(f'settings "{name}" loaded')
+        return {"ok": True, "name": name}
+
+    def delete_preset(self, name):
+        if self.settings["presets"].pop(str(name or ""), None) is None:
+            return {"ok": False, "error": "Those saved settings are not there any more."}
+        self.save_settings()
+        self.say(f'saved settings "{name}" deleted (the settings in use stay as they are)')
+        return {"ok": True}
+
     def save_settings(self):
+        data = self.settings
+        kept = getattr(self, "test_kept", None)
+        if kept:  # a test queue has its own settings swapped in for now: write down what was set before it
+            data = {**data, **kept}
         try:
-            SETTINGS_FILE.write_text(json.dumps(self.settings, indent=1))
+            SETTINGS_FILE.write_text(json.dumps(data, indent=1))
         except OSError:
             pass
 

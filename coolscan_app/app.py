@@ -8,10 +8,11 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 import numpy as np
 
-from .colour import display_image
+from .colour import FILM_PROFILE_LEAST, display_image, shrink
 from .demo import _Demo
 from .driver import Cancelled, DriverLog, _lost_scanner, _stopped, explain
 from .imaging import encode_png
@@ -19,14 +20,21 @@ from .notify import send_banner, send_ntfy, send_shortcut
 from .rolls import RollsMixin
 from .scanning import ICE_HELPER, ScanMixin
 from .settings import SettingsMixin, default_settings
+from .testmode import TestMixin
 
-PREVIEW_MAX_SIDE = 1400  # pixels; previews are shrunk to this for the browser
 WATCH_SECONDS = 2  # how often the idle scanner is asked whether film is in
 
 
-class App(SettingsMixin, RollsMixin, ScanMixin):
+class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin):
     def __init__(self, demo=False):
         self.demo = demo
+        self.test_mode = False       # started with --test: the test page is served as well
+        self.testing = False         # a test queue is running (its settings are swapped in for the time being)
+        self.test_pass_cache = None  # while testing: passes already taken, so runs that need the same one share it
+        self.test_rescan = False     # the run being tested wants its own pass whatever is there
+        self.test_reused = False     # the run being tested used an earlier run's pass
+        self.test_kept = None        # while testing: the settings as they were, put back when the queue is done
+        self.test = {"results": [], "folder": None, "frame": None, "crop": (0.5, 0.5), "running": None}
         self.lock = threading.Lock()
         # One thread at a time talks to the scanner. A job holds this for its whole
         # length; the film watcher only looks when nobody holds it.
@@ -43,6 +51,13 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         self.frame_rot = {}         # frame index -> extra quarter turns, counterclockwise
         self.preview_raw = {}       # frame index -> planes, to redraw after a setting changes
         self.preview_info = {}      # frame index -> text
+        self.frame_source = {}      # frame index -> where its picture comes from: "thumbnail", "preview" or "scan"
+        self.frame_saved = {}       # frame index -> what was saved from it on this strip: [{"files": [...], "took": s}]
+        self.picture_v = {}         # frame index -> a number that changes whenever its picture does
+        self.picture_serial = 0
+        self.thumb_v = 0
+        self.crops = {}             # frame index -> (x0, y0, x1, y1), fractions of the frame as the scanner sees it
+        self.frame_exposures = {}   # frame index -> the exposures its picture on screen was scanned with
         self.focus_lock = None      # dict(frame, position, result) from Autofocus
         self.frame_focus = {}       # frame index -> lens position, focused once per frame
         self.exposure_lock = None   # dict(frame, exposures, infrared, film) from Auto exposure
@@ -99,21 +114,36 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         if d is not None:
             frames = list(range(len(d.frames)))
             boxes = self._thumb_boxes()
+        tiles = {i: {"src": self.frame_source.get(i), "v": self.picture_v.get(i, 0),
+                     "info": self.preview_info.get(i, ""), "saved": self.frame_saved.get(i, []),
+                     "turns": self._turns(i), "crop": self.crops.get(i)} for i in frames}
         return {
             "demo": self.demo, "connected": s is not None, "caps": caps, "job": self.job,
             "progress": self.progress, "log": self.log[-60:], "settings": self.settings,
-            "frames": frames, "thumb": self.thumb_png is not None, "boxes": boxes,
+            "frames": frames, "tiles": tiles, "thumb": self.thumb_png is not None, "thumb_v": self.thumb_v,
+            "boxes": boxes, "presets": sorted(self.settings["presets"]), "preset": self.current_preset(),
+            "film_profiles": self.film_profiles(), "roll_measured": len(self._roll_colour()),
+            "profile_least": FILM_PROFILE_LEAST,
             "previews": sorted(self.previews),
             "turns": {i: self._turns(i) for i in frames}, "preview_info": self.preview_info,
             "focus_lock": self.focus_lock,
             "exposure_lock": self.exposure_lock, "version": self.version,
-            "roll_path": str(self._base() / self.settings["roll"]) if self.settings["roll"] else None,
+            "roll_path": self._short_path(self._base() / self.settings["roll"]) if self.settings["roll"] else None,
             "film_text": self._film_text(), "roll_number": self._roll_number(self.settings["roll"] or ""),
             "sample_name": self._stem(None, number) + ".tif", "next_number": number,
             "film_in": self.film_in if self.settings["auto_thumbnail"] else None,
             "ice_helper": self.ice_ready, "strip": self.strip_id,
             "rolls": self.rolls(), "timing": dict(self.timing, now=time.time()),
+            "test": self.test_state() if self.test_mode else None,
         }
+
+    @staticmethod
+    def _short_path(path):
+        """A folder the way the Mac writes it for people: ~ for the home folder."""
+        try:
+            return "~/" + str(Path(path).relative_to(Path.home()))
+        except ValueError:
+            return str(path)
 
     def run_job(self, name, fn, *args):
         with self.lock:
@@ -146,6 +176,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         self.session, self.caps = None, None
         self.discovery, self.thumb_png, self.film_in = None, None, None
         self.strip_id += 1
+        self._forget_pictures()
         self.say("the next button you press (or Connect) connects to the scanner again")
 
     def _ice_cmd(self):
@@ -260,8 +291,6 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         if d.thumbnail is None:
             if len(d.frames) == 1:
                 self.preview([0])  # a slide has no thumbnail pass, so it gets a preview scan instead
-        elif self.settings["preview_mode"] == "thumbnail":
-            self.preview([])  # "Thumbnail (fast)": the frames are cut from the pass just made
 
     # -- scanner steps
     def connect(self):
@@ -289,7 +318,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         self.say(f"multi-sample: this scanner reads each line up to {many} times in one pass" if many > 1 else
                  "multi-sample: this scanner reads each line once, so 2x and 4x average that many passes")
         self.discovery, self.thumb_png, self.medium_seen = None, None, None
-        self.previews, self.preview_info = {}, {}
+        self._forget_pictures()
         self.film_in, self.film_armed = None, True
         self.strip_id += 1
 
@@ -322,7 +351,8 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         s = self.need_session()
         self.say("loaded" if s.load() else "nothing waiting to load")
         self.refresh_caps()
-        self.discovery, self.thumb_png, self.previews, self.preview_info = None, None, {}, {}
+        self.discovery, self.thumb_png = None, None
+        self._forget_pictures()
         self.film_armed = True
         self.strip_id += 1
 
@@ -331,8 +361,9 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         s.eject()
         self.say("ejected")
         self.refresh_caps()
-        self.discovery, self.thumb_png, self.previews, self.preview_info = None, None, {}, {}
-        self.preview_raw, self.frame_rot, self.frame_focus = {}, {}, {}
+        self.discovery, self.thumb_png = None, None
+        self._forget_pictures()
+        self.frame_rot, self.frame_focus = {}, {}
         self.focus_lock = self.exposure_lock = None
         self.strip_id += 1
         # do not take the same strip straight back in: wait until the scanner says it is out
@@ -351,9 +382,13 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         return np.ascontiguousarray(np.rot90(plane, k)) if k else plane
 
     def _png(self, planes, i=None):
+        # a film profile needs the exposures of the pass, which a preview scan and a scan have and
+        # the thumbnail pass has not: thumbnails are always converted each frame on its own
+        exposures = self.frame_exposures.get(i) if i is not None else None
         img = display_image({k: self._rot(v, i) for k, v in planes.items()}, self._film(),
                             invert=self.settings["invert_preview"], tone=self.settings["tone"],
-                            restore=self.settings["restore"])
+                            restore=self.settings["restore"],
+                            profile=self._film_profile() if exposures else None, exposures=exposures)
         if i is not None and max(img.shape[:2]) < 600:
             # small thumbnail tiles are enlarged so they fill the preview box
             f = math.ceil(600 / max(img.shape[:2]))
@@ -363,13 +398,91 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
     def rotate(self, indices, quarter):
         for i in indices:
             self.frame_rot[i] = (self.frame_rot.get(i, 0) + quarter) % 4
-        self.redraw()
+        self.redraw(indices)
 
-    def redraw(self):
-        if self.discovery is not None and self.discovery.thumbnail is not None:
+    def redraw(self, only=None):
+        """Make the pictures on screen again after a setting that changes their look (all of them, or `only`)."""
+        if only is None and self.discovery is not None and self.discovery.thumbnail is not None:
             self.thumb_png = self._png(self.discovery.thumbnail)
+            self.thumb_v += 1
         for i, planes in list(self.preview_raw.items()):
-            self.previews[i] = self._png(planes, i)
+            if only is None or i in only:
+                self.previews[i] = self._png(planes, i)
+                self._new_picture(i)
+        with self.lock:
+            self.version += 1
+
+    # -- the picture of each frame on screen: from the thumbnail pass, a preview scan, or the finished scan
+    def _forget_pictures(self):
+        self.previews, self.preview_info, self.preview_raw = {}, {}, {}
+        self.frame_source, self.frame_saved, self.crops = {}, {}, {}
+        self.frame_exposures = {}
+
+    def _new_picture(self, i):
+        self.picture_serial += 1
+        self.picture_v[i] = self.picture_serial
+
+    def _show(self, i, planes, source, info, exposures=None):
+        """Put a picture of frame i on the screen and say where it comes from."""
+        self.preview_raw[i] = planes
+        self.frame_exposures.pop(i, None)
+        if exposures:
+            self.frame_exposures[i] = dict(exposures)
+        self.previews[i] = self._png(planes, i)
+        self.frame_source[i], self.preview_info[i] = source, info
+        self._new_picture(i)
+        with self.lock:
+            self.version += 1
+
+    def _show_thumbnail_tiles(self):
+        """Right after the thumbnail pass every frame gets its piece of it, so there is something to look at."""
+        d = self.discovery
+        for i in range(len(d.frames)):
+            b = self._thumb_tile_bounds(i)
+            if b is not None:
+                first, last, upper, lower = b
+                tile = {k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}
+                self._show(i, tile, "thumbnail", f"from the thumbnail pass, {last - first}x{lower - upper} px")
+
+    def set_crop(self, i, rect):
+        """Keep (or with None, drop) the part of frame i to save. Fractions of the frame, as the scanner sees it."""
+        d = self.discovery
+        if d is None or not 0 <= i < len(d.frames):
+            return {"ok": False}
+        self.crops.pop(i, None)
+        if rect:
+            x0, y0, x1, y1 = (min(1.0, max(0.0, float(v))) for v in rect)
+            x0, x1 = sorted((x0, x1))
+            y0, y1 = sorted((y0, y1))
+            if x1 - x0 >= 0.05 and y1 - y0 >= 0.05:
+                self.crops[i] = (round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4))
+        with self.lock:
+            self.version += 1
+        return {"ok": True, "crop": self.crops.get(i)}
+
+    def _crop_box(self, i, shape):
+        """Frame i's crop as (row0, row1, col0, col1) on a plane of `shape` turned the way the person sees it."""
+        rect = self.crops.get(i)
+        if not rect:
+            return None
+        corners = [(rect[0], rect[1]), (rect[2], rect[3])]
+        for _ in range(self._turns(i)):  # the same quarter turns the picture gets
+            corners = [(y, 1 - x) for x, y in corners]
+        (xa, ya), (xb, yb) = corners
+        rows, cols = shape
+        r0, r1 = sorted((int(round(ya * rows)), int(round(yb * rows))))
+        c0, c1 = sorted((int(round(xa * cols)), int(round(xb * cols))))
+        if r1 - r0 < 16 or c1 - c0 < 16:
+            return None
+        return r0, r1, c0, c1
+
+    def _cropped(self, i, planes):
+        """Planes that are already turned, cut to frame i's crop (or as they are when there is none)."""
+        box = self._crop_box(i, planes[0].shape) if planes else None
+        if box is None:
+            return planes
+        r0, r1, c0, c1 = box
+        return [np.ascontiguousarray(p[r0:r1, c0:c1]) for p in planes]
 
     def _lock_wb(self):
         wb = self.settings["white_balance"]
@@ -404,10 +517,13 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         self.discovery = d
         self.strip_id += 1
         self.medium_seen = self._medium(s)
-        self.previews, self.preview_info, self.preview_raw, self.frame_rot = {}, {}, {}, {}
+        self._forget_pictures()
+        self.frame_rot = {}
         self.frame_focus = {}  # new film (or a new look at it): focus each frame again
         if d.thumbnail is not None:
             self.thumb_png = self._png(d.thumbnail)
+            self.thumb_v += 1
+            self._show_thumbnail_tiles()
             if d.thumbnail_complete is False:
                 self.say("warning: the thumbnail pass came back short")
         else:
@@ -427,7 +543,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
                 self.say("the film was taken out or moved since the frames were found (the scanner "
                          "rewinds a strip by itself after sitting idle): finding the frames again")
                 self.discovery, self.thumb_png = None, None
-                self.previews, self.preview_info, self.preview_raw = {}, {}, {}
+                self._forget_pictures()
         if self.discovery is None:
             self.thumbnail()
         return self.discovery
@@ -541,41 +657,20 @@ class App(SettingsMixin, RollsMixin, ScanMixin):
         return opts
 
     def preview(self, indices):
+        """A sharper look at frames than the thumbnail pass gives: a quick low-resolution scan of each."""
         s = self.need_session()
         d = self._ensure_discovery()
-        indices = indices or list(range(len(d.frames)))
-        mode = self.settings["preview_mode"]
-        if mode == "thumbnail" and d.thumbnail is None:
-            self.say("no thumbnail on this holder, so previews are scanned instead")
-            mode = "scan"
+        indices = [i for i in (indices or range(len(d.frames))) if 0 <= i < len(d.frames)]
         for i in indices:
             if self.cancel:
                 raise Cancelled
-            if mode == "thumbnail":
-                b = self._thumb_tile_bounds(i)
-                if b is None:
-                    self.say(f"frame {i + 1}: can't place it on the thumbnail, scanning instead")
-                else:
-                    first, last, upper, lower = b
-                    tile = {k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}
-                    self.preview_raw[i] = tile
-                    self.previews[i] = self._png(tile, i)
-                    self.preview_info[i] = f"from thumbnail, {last - first}x{lower - upper} px"
-                    self.say(f"frame {i + 1}: preview cut from the thumbnail")
-                    with self.lock:
-                        self.version += 1
-                    continue
             dpi = int(self.settings["preview_dpi"])
             self.say(f"frame {i + 1}: preview scan at {dpi} dpi")
             r = self._driver_scan(s, d.frames[i], dpi=dpi, progress=self._progress,
                                   **self._scan_options(s, i, d.frames[i], False))
-            self.preview_raw[i] = {k: v[::4, ::4] if max(v.shape) > 2 * PREVIEW_MAX_SIDE else v
-                                   for k, v in r.colors.items()}
-            self.previews[i] = self._png(self.preview_raw[i], i)
-            self.preview_info[i] = (f"scanned, {r.cols}x{r.rows} px at {r.dpi} dpi, "
-                                    f"focus {r.focused} ({r.focus_position})")
-            with self.lock:
-                self.version += 1
+            self._show(i, {k: shrink(v) for k, v in r.colors.items()}, "preview",
+                       f"{r.cols}x{r.rows} px at {r.dpi} dpi, focus {r.focused} ({r.focus_position})",
+                       exposures=getattr(r, "exposures", None))
 
     def _pick(self, index):
         d = self._ensure_discovery()

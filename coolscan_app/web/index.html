@@ -1,96 +1,162 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan</title>
 <link rel="stylesheet" href="/style.css"></head><body>
-<header><h1>Coolscan</h1><span id="status">starting…</span><span style="flex:1"></span>
-<button id="b-connect">Connect</button><button id="b-load">Load</button><button id="b-eject">Eject</button></header>
-<main><div>
-<section><h2>Film</h2>
-<label>Film type<select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative</option></select></label>
-<label id="fmtrow">Format<select id="s-format"><option value="">From holder</option></select></label>
-</section>
-<section><h2>Preview</h2>
-<button class="primary" id="b-thumb">Thumbnail only</button><button id="b-preview">Preview</button>
-<label>Preview from<select id="s-preview_mode"><option value="scan">Preview scan (sharper)</option><option value="thumbnail">Thumbnail (fast)</option></select></label>
-<label>Preview scan dpi<select id="s-preview_dpi"></select></label>
-<label>Invert negatives in preview<input type="checkbox" id="s-invert_preview"></label>
-<label>Thumbnail when film goes in<input type="checkbox" id="s-auto_thumbnail"></label>
-<label>Rotate all 180°<input type="checkbox" id="s-rotate180"></label>
-<div>Rotate selected <button id="b-rl" title="90° left">⟲ 90°</button><button id="b-rr" title="90° right">⟳ 90°</button></div>
-<p class="hint">Click a frame to select it, ⌘-click to add or remove one, Shift-click for a range. Rotation applies to the previews and to the saved scans.</p>
-<p class="hint">Thumbnail only: one quick pass over the strip. "Thumbnail (fast)" cuts each frame out of that pass instead of scanning it again.</p>
-</section>
-<section><h2>Focus &amp; exposure</h2>
+<header id="bar">
+<div class="brand"><h1>Coolscan</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
+<div class="tools" role="toolbar" aria-label="Scanner">
+<button id="b-connect" title="Connect to the scanner again">Connect</button>
+<button id="b-load" title="Take in a strip that is waiting at the slot">Load</button>
+<button id="b-eject" title="Eject the film">Eject</button>
+<span class="gap"></span>
+<button id="b-thumb" title="One quick pass over the strip to find the frames (T)">Thumbnail</button>
+<button id="b-preview" title="A quick, sharper look than the thumbnail (P)">Preview</button>
+<button class="primary" id="b-scan" title="Scan and save (⌘ Return)">Scan all frames</button>
+<button id="b-stop" disabled title="Stop after the current step">Stop</button>
+</div>
+<div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span><span id="timing"></span></div>
+</header>
+<main>
+<aside id="side" aria-label="Settings">
+
+<details class="card" id="g-presets"><summary>Saved settings<span class="sum" id="sum-presets"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Use</span><select id="preset" aria-label="Saved settings"></select></label>
+<div class="btnrow"><button id="b-presetnew">Save as…</button><button id="b-presetdel">Delete</button></div>
+<div class="inline" id="presetnew" hidden><input type="text" id="presetname" maxlength="60" placeholder="Name, e.g. Portra archive" aria-label="Name for these settings"><button class="primary" id="b-presetsave">Save</button><button id="b-presetcancel">Cancel</button></div>
+<div class="inline" id="presetdel" hidden><span id="presetdelmsg"></span><button id="b-presetdelyes">Delete</button><button id="b-presetdelno">Cancel</button></div>
+<p class="hint" id="presetmsg" hidden></p>
+<p class="help">Keep the settings you use for one kind of work under a name, and switch between them here. Saving under a name that exists replaces it. A saved set holds how you scan and save: film type, resolution, dust removal, grain, focus and exposure choices, colour space, file name choices. It does not hold the folder, the roll, or who to tell. "Not saved" means the settings in use differ from every saved set.</p>
+</div></details>
+
+<details class="card" id="g-film" open><summary>Film<span class="sum" id="sum-film"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Film type</span><select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative</option></select></label>
+<label class="row" id="fmtrow"><span>Format</span><select id="s-format"><option value="">From holder</option></select></label>
+<label class="row"><span>Show negatives as positives</span><input type="checkbox" id="s-invert_preview"></label>
+<label class="row"><span>Turn every frame 180°</span><input type="checkbox" id="s-rotate180"></label>
+<div id="profilebox">
+<p class="sub">Colour of negatives</p>
+<label class="row"><span>Colour from</span><select id="filmprofile" aria-label="Where the colour of negatives comes from"></select></label>
+<p class="hint" id="profilehint"></p>
+<div class="btnrow"><button id="b-profilenew">Save this roll's film…</button><button id="b-profiledel">Delete</button></div>
+<div class="inline" id="profilenew" hidden><input type="text" id="profilename" maxlength="60" placeholder="Film, e.g. Kodak Gold 200" aria-label="Name of the film"><button class="primary" id="b-profilesave">Save</button><button id="b-profilecancel">Cancel</button></div>
+<div class="inline" id="profiledel" hidden><span id="profiledelmsg"></span><button id="b-profiledelyes">Delete</button><button id="b-profiledelno">Cancel</button></div>
+<p class="hint" id="profilemsg" hidden></p>
+</div>
+<p class="help">"Each frame on its own" works out the colour of a negative from that one frame, which goes wrong when the frame is mostly one colour (grass, a sunset, a blue sky). A film profile takes the colour from the film instead: the app measures every frame you scan, and "Save this roll's film…" turns the measurements of the roll you are in into a profile under the film's name. Pick it for later strips and rolls of the same film and every frame gets the same colour. Brightness is still set for each frame. Thumbnails always use "each frame on its own".</p>
+</div></details>
+
+<details class="card" id="g-roll" open><summary>Roll<span class="sum" id="sum-roll"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<select id="rollpick" class="wide" aria-label="Roll" title="The roll you are scanning. Pick another one to carry on in it."></select>
+<p class="hint" id="rollfilm"></p><p class="hint warn" id="rollpickmsg" hidden></p>
+<label class="row"><span>Roll number</span><span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
+<div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
+<div class="btnrow"><button id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div></div>
+<label for="rolldesc">Film description</label>
+<textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
+<div class="btnrow"><button id="b-newroll">New roll…</button></div>
+<p class="help">Scans go into one folder per roll, and every strip of the roll adds to it with continuing numbers. The list holds every roll in the target folder: pick one to carry on in it. The description is saved as Description.txt in the roll's folder whenever you change it. Changing the roll number renames the folder and the R… part of its files; nothing is deleted.</p>
+</div></details>
+
+<details class="card" id="g-scan" open><summary>Scan quality<span class="sum" id="sum-scan"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Resolution (dpi)</span><select id="s-dpi"></select></label>
+<label class="row"><span>Multi-sample</span><select id="s-samples"></select></label>
+<p class="hint" id="mshint" hidden></p>
+<label class="row"><span>Multi-Exposure</span><select id="s-multi_exposure"><option value="0">Off</option><option value="2">2x longer</option><option value="4">4x longer</option></select></label>
+<p class="hint" id="mehint" hidden></p>
+<label class="row"><span>Dust &amp; scratch removal</span><input type="checkbox" id="s-clean"></label>
+<label class="row" id="dustrow"><span>Dust removal by</span><select id="s-dust_method"><option value="builtin">Built in</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver (older method)</option></select></label>
+<label class="row"><span>Grain reduction</span><select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
+<label class="row"><span>Restore faded colours</span><select id="s-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
+<p class="help">Dust removal finds dust and scratches in the infrared picture. Built in leaves clean film exactly as scanned, gives light dirt its light back and fills heavy dirt from the film around it. Driver is the older method, which changes more of the picture; in Archive mode it needs a second pass. Multi-sample gives cleaner shadows and takes that many times longer on this scanner. Multi-Exposure scans each frame a second time with a longer exposure and reads the dense parts of the film from that pass: the shadows of a slide, the highlights of a negative. It helps slides most; on negatives the gain is small. Each frame takes at least twice as long. Grain reduction and colour restoration are the app's own stand-ins for Nikon's GEM and ROC, and are off unless you choose a level.</p>
+</div></details>
+
+<details class="card" id="g-save" open><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Archive mode (RAW + Positive)</span><input type="checkbox" id="s-archive"></label>
+<label class="row" id="negrow"><span>Negatives saved as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
+<label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
+<label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
+<label class="row"><span>Also save the infrared picture</span><input type="checkbox" id="s-ir"></label>
+<label class="row"><span>Folder</span><input type="text" id="s-outdir"></label>
+<p class="help" id="archint">Archive mode saves two folders from one pass: RAW (the untouched scan with the infrared as a 4th channel) and Positive (the finished picture, dust removed if ticked). The infrared picture is an extra file ending in _IR.tif that shows only the dust and scratches; dust removal works the same with it unticked. All files are 16-bit TIFF.</p>
+</div></details>
+
+<details class="card" id="g-names"><summary>File names<span class="sum" id="sum-names"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<p class="hint" id="nameex"></p>
+<label class="row"><span>Prefix</span><input type="text" id="s-basename" placeholder="optional"></label>
+<label class="row"><span>Scan date in name</span><input type="checkbox" id="s-name_date"></label>
+<label class="row"><span>Counter digits</span><input type="number" id="s-digits" min="1" max="6"></label>
+<label class="row"><span>Next number</span><input type="number" id="s-start" min="1"></label>
+<label class="row"><span>Photo taken</span><input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
+<p class="help">Names are built as prefix, scan date, picture number, then the number of the roll you are scanning, which is always there. The next number counts on by itself from the pictures already in the roll; type another number to carry on from there once. A name that is taken is skipped, never overwritten. "Photo taken" sets the date galleries sort by: with only a year the files get today's day and time in that year.</p>
+</div></details>
+
+<details class="card" id="g-focus"><summary>Focus &amp; exposure<span class="sum" id="sum-focus"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <div class="sub">Do once, now</div>
-<button class="primary" id="b-cal">Calibrate</button><button id="b-af">Autofocus</button><button id="b-ae">Auto exposure</button><button id="b-unlock">Reset</button>
-<p class="hint">Each button does its job once, right away, on the selected frame (or frame 1). Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame. Reset undoes that.</p>
+<div class="btnrow"><button id="b-cal" title="Autofocus and measure the exposure on this frame, then keep both for every frame">Calibrate</button><button id="b-af">Autofocus</button><button id="b-ae">Auto exposure</button><button id="b-unlock" title="Back to focusing and exposing each frame on its own">Reset</button></div>
 <p class="hint" id="calinfo"></p>
 <div class="sub">Settings, used for every preview and scan</div>
-<label>Focus<select id="s-focus_mode"><option value="frame">Autofocus each frame once</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
-<label id="posrow">Lens position<input type="number" id="s-focus_position"></label>
-<label>Focus point<span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
-<label>Exposure<select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
-<label>White balance<select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
+<label class="row"><span>Focus</span><select id="s-focus_mode"><option value="frame">Autofocus each frame once</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
+<label class="row" id="posrow"><span>Lens position</span><input type="number" id="s-focus_position"></label>
+<label class="row"><span>Focus point</span><span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
+<label class="row"><span>Exposure</span><select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
+<label class="row"><span>White balance</span><select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
+<p class="help">The buttons act once, right away, on the frame you are looking at. Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame; Reset undoes that. "Pick" lets you click the big picture to choose where the scanner focuses.</p>
+</div></details>
+
+<details class="card" id="g-preview"><summary>Thumbnail &amp; preview<span class="sum" id="sum-preview"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
+<label class="row"><span>Preview scan dpi</span><select id="s-preview_dpi"></select></label>
+<p class="help">The thumbnail is one quick pass over the strip that finds the frames; each frame's piece of it is what you see first. A preview is a quick scan of a frame that looks sharper. Neither is saved. Once a frame is scanned, the picture you see is the scan itself.</p>
+</div></details>
+
+<details class="card" id="g-done"><summary>When a strip is done<span class="sum" id="sum-done"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
+<label class="row"><span>Stop at the first frame that fails</span><input type="checkbox" id="s-stop_on_errors"></label>
+<label class="row"><span>Write a scan log</span><input type="checkbox" id="s-scan_log"></label>
+<div class="sub">Tell me</div>
+<label class="row"><span>Banner on this Mac</span><input type="checkbox" id="s-notify_mac"></label>
+<label class="row"><span>Run a shortcut</span><input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
+<label class="row"><span>ntfy topic</span><input type="text" id="s-notify_ntfy" placeholder="optional"></label>
+<div class="btnrow"><button id="b-notifytest">Send a test</button></div>
+<p class="help">If a frame fails (for example autofocus), the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder. "Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you. ntfy is a free phone app that needs no shortcut.</p>
+</div></details>
+</aside>
+
+<div id="work">
+<section id="frames" aria-label="Frames">
+<div class="head"><h2>Frames</h2><span class="hint" id="framesum"></span><span class="grow"></span>
+<button id="b-all" title="Tick every frame (⌘A)">Select all</button><button id="b-none" title="Untick every frame (Esc)">Select none</button></div>
+<div id="tiles" role="listbox" aria-label="Frames on this strip" aria-multiselectable="true"></div>
+<p class="hint" id="noframes">No frames yet. Feed a strip in and the app finds them, or press Thumbnail.</p>
+<details id="stripbox"><summary>Whole strip, as the thumbnail pass saw it</summary><div id="thumbwrap"><div class="inner"><img id="thumb" alt="The whole strip"></div></div></details>
 </section>
-<section><h2>Roll</h2>
-<select id="rollpick" title="The roll you are scanning. Pick another one to carry on in it."></select><div class="hint" id="rollfilm"></div>
-<p class="hint warn" id="rollpickmsg" hidden></p>
-<label>Roll number<span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
-<div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
-<button class="primary" id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div>
-<div>Film description</div>
-<textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
-<p class="hint" id="rolldeschint">Saved as Description.txt in the roll folder, and updated whenever you change it.</p>
-<button id="b-newroll">New roll…</button>
-<div id="rolldlg" hidden style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
-<p class="hint">Start a new folder for the next roll? Film details are optional; they name the folder and go into the files.</p>
-<label>Brand<input type="text" id="r-film_brand" placeholder="e.g. Kodak"></label>
-<label>Film<input type="text" id="r-film_stock" placeholder="e.g. Portra"></label>
-<label>ISO<input type="text" id="r-film_iso" placeholder="e.g. 400"></label>
-<label>Notes<input type="text" id="r-film_notes" placeholder="e.g. Summer 2005"></label>
-<div>Film description</div>
+
+<section id="viewer" aria-label="Preview">
+<div class="head"><h2 id="vtitle">Preview</h2><span class="chip" id="vsrc" hidden></span><span class="hint" id="vinfo"></span><span class="grow"></span>
+<button id="b-sharper" title="A quick preview scan of this frame, sharper than the thumbnail">Preview scan</button>
+<button class="icon" id="b-rl" title="Turn 90° left ( [ )" aria-label="Turn left">⟲</button><button class="icon" id="b-rr" title="Turn 90° right ( ] )" aria-label="Turn right">⟳</button>
+<button id="b-crop" aria-pressed="false" title="Drag on the picture to choose the part that is saved (C)">Crop</button><button id="b-cropclear" hidden>Clear crop</button>
+<button id="b-zoom" title="Enlarge (Space, or double-click the picture)">Enlarge</button></div>
+<div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden></div><div class="mark" id="fmark" hidden></div></div>
+<p class="hint" id="vempty">Click a frame above to see it here.</p></div>
+<p class="hint" id="vsaved" hidden></p>
+<p class="hint" id="keyhint">Keys: ← → look at the next frame · X tick it for scanning · Space enlarge · C crop · [ ] turn · ⌘A tick all · ⌘Return scan</p>
+</section>
+
+<section id="activity" aria-label="Activity"><div class="head"><h2>Activity</h2><span class="hint" id="laststrip"></span></div>
+<div id="log" role="log" tabindex="0" aria-label="What the app did"></div></section>
+</div>
+</main>
+
+<dialog id="rolldlg" aria-labelledby="rolldlgtitle"><h2 id="rolldlgtitle">Start a new roll?</h2>
+<p class="hint">The next scans go into a new folder and numbering starts again at 1. Film details are optional: they name the folder and go into the files.</p>
+<label class="row"><span>Brand</span><input type="text" id="r-film_brand" placeholder="e.g. Kodak"></label>
+<label class="row"><span>Film</span><input type="text" id="r-film_stock" placeholder="e.g. Portra"></label>
+<label class="row"><span>ISO</span><input type="text" id="r-film_iso" placeholder="e.g. 400"></label>
+<label class="row"><span>Notes</span><input type="text" id="r-film_notes" placeholder="e.g. Summer 2005"></label>
+<label for="r-film_description">Film description</label>
 <textarea id="r-film_description" placeholder="Optional. Saved as Description.txt in the new roll's folder."></textarea>
-<button class="primary" id="b-rollok">Start new roll</button><button id="b-rollcancel">Cancel</button>
-</div></section>
-<section><h2>When a strip is done</h2>
-<label>Banner on this Mac<input type="checkbox" id="s-notify_mac"></label>
-<label>Run a shortcut<input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
-<label>ntfy topic<input type="text" id="s-notify_ntfy" placeholder="optional"></label>
-<p class="hint">Tells you when a batch finishes or stops on an error. "Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you (an email to yourself, a reminder with an alert, a push app). ntfy is a free phone app that needs no shortcut.</p>
-<button id="b-notifytest">Send a test</button>
-</section>
-<section><h2>Scan</h2>
-<label>Resolution (dpi)<select id="s-dpi"></select></label>
-<label>Multi-sample<select id="s-samples"></select></label>
-<p class="hint" id="mshint"></p>
-<label>Also save the infrared picture (_IR.tif)<input type="checkbox" id="s-ir"></label>
-<p class="hint">The infrared picture shows only the dust and scratches. Dust removal uses it either way; tick this only if you want it as an extra file next to each picture.</p>
-<label>Dust &amp; scratch removal<input type="checkbox" id="s-clean"></label>
-<label id="dustrow">Dust removal by<select id="s-dust_method"><option value="builtin">Built in (one pass)</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver, second pass (slow)</option></select></label>
-<label>Grain reduction<select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
-<label>Restore faded colours<select id="s-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
-<label>Archive mode<input type="checkbox" id="s-archive"></label>
-<p class="hint" id="archint">Archive mode saves two folders from one pass: RAW (untouched scan with infrared as a 4th channel) and Positive (finished picture, dust removed if ticked).</p>
-<label id="negrow">Negatives saved as<select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
-<label>Folder<input type="text" id="s-outdir"></label>
-<label>Negative tone<select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
-<label>Colour space<select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
-<label>File name prefix<input type="text" id="s-basename" placeholder="optional"></label>
-<label>Scan date in name<input type="checkbox" id="s-name_date"></label>
-<label>Counter digits<input type="number" id="s-digits" min="1" max="6"></label>
-<label>Next number<input type="number" id="s-start" min="1"></label>
-<p class="hint">Counts on by itself from the pictures already in the roll folder. Type another number to carry on from there (empty it to count by itself again). A name that is taken is skipped, never overwritten.</p>
-<label>Photo taken (year, or year-month-day)<input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
-<p class="hint">Galleries sort the scans by this date instead of today's. With only a year, the files get today's day and time in that year. The real scan date stays in the file's description. Leave empty to use today.</p>
-<p class="hint" id="nameex"></p>
-<p class="hint">Names are built as prefix, scan date, picture number, then the number of the roll you are scanning, which is always there. The prefix and the date are optional and bring no "_" when left out.</p>
-<label>Stop on errors<input type="checkbox" id="s-stop_on_errors"></label>
-<label>Eject film when done<input type="checkbox" id="s-eject_after"></label>
-<label>Write scan log<input type="checkbox" id="s-scan_log"></label>
-<p class="hint">If a frame fails (for example autofocus), the rest of the strip is still scanned unless "Stop on errors" is ticked. The scan log is ScanLog.txt in the roll folder.</p>
-<button class="primary" id="b-scan">Scan all frames</button><button id="b-stop">Stop</button>
-<p class="hint">Scans the whole strip in one go. To scan only some frames, select them first (click, ⌘-click, Shift-click) and the button scans just those.</p>
-</section></div>
-<div><section><h2>Thumbnail</h2><div id="thumbwrap"><div class="inner"><img id="thumb" alt=""></div></div><p class="hint" id="nothumb">No thumbnail yet.</p></section>
-<section><h2>Frames</h2><div id="grid"></div></section>
-<section><h2>Activity</h2><div id="timing" hidden></div><div class="hint" id="progtxt" hidden></div><progress id="prog" value="0" max="1" hidden></progress><div id="log"></div></section></div></main>
+<p class="hint warn" id="rolldlgmsg" hidden></p>
+<div class="btnrow"><button id="b-rollcancel">Cancel</button><button class="primary" id="b-rollok">Start new roll</button></div>
+</dialog>
+<dialog id="zoom" aria-label="Enlarged picture"><img id="zoomimg" alt=""><span id="zoomcap"></span></dialog>
 <script src="/app.js"></script></body></html>

@@ -3,6 +3,7 @@
 
 Run:   python coolscan.py            (then the browser opens on http://127.0.0.1:8765)
 Try:   python coolscan.py --demo     (a pretend scanner, to try the screens)
+Test:  python coolscan.py --test     (test mode: one frame scanned with several sets of settings, to compare)
 
 Needs Python 3.13+ and:  pip install nkscan numpy
 The app itself is in the coolscan_app folder next to this file.

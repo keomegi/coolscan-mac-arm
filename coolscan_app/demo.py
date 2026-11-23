@@ -104,9 +104,12 @@ class _Demo:
         rows, cols = int(0.94 * dpi), int(1.42 * dpi)
         r.colors = self._film(rows, cols, frame[0] % 7)
         rng = np.random.default_rng()
+        usual = {"red": 1200, "green": 900, "blue": 700}
         for name, plane in r.colors.items():  # noise that differs on every pass, like the real thing
             noise = rng.integers(-400, 401, plane.shape, dtype=np.int32)
-            r.colors[name] = np.clip(plane.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
+            # a longer exposure reads more light off the same film, up to the ceiling; the noise stays as it is
+            gain = (exposures or {}).get(name, usual.get(name, 1)) / usual.get(name, 1) if exposures else 1
+            r.colors[name] = np.clip(plane.astype(np.float64) * gain + noise, 0, 65535).astype(np.uint16)
         r.ir = np.full((rows, cols), 50000, np.uint16) if (infrared or clean) else None
         # specks and a scratch that block the light, in the picture and in the infrared
         size = max(1, dpi // 500)

@@ -7,7 +7,7 @@ import numpy as np
 
 from .enhance import restore_colour
 
-PREVIEW_MAX_SIDE = 1400  # pixels; previews are shrunk to this for the browser
+PREVIEW_MAX_SIDE = 1600  # pixels; pictures for the screen are never larger than this
 HEADROOM = 0.02  # fraction of the range left free below black and above white in positives
 
 
@@ -19,37 +19,144 @@ NIKON_MODEL_NAMES = {"LS-40 ED": "Nikon COOLSCAN IV ED", "LS-50 ED": "Nikon COOL
                      "LS-4000 ED": "Nikon SUPER COOLSCAN 4000 ED", "LS-5000 ED": "Nikon SUPER COOLSCAN 5000 ED"}
 
 
-def invert_negative(planes, tone="nikon"):
+def _density(plane, exposure=None):
+    """Film density as the scanner read it (float32). With the pass's exposure (the scanner's
+    integration time for this colour) the exposure is taken out, so that frames exposed
+    differently can be compared: twice the exposure reads twice the light off the same film."""
+    v = -np.log10(np.maximum(plane.astype(np.float32), 1.0) / 65535.0)
+    if exposure:
+        v += np.float32(math.log10(float(exposure)))
+    return v
+
+
+def _inner_sample(plane, exposure=None):
+    """Densities from inside the frame (not its clear edges), thinned out to about 400,000 of them."""
+    rows, cols = plane.shape
+    inner = plane[rows // 20: rows - rows // 20, cols // 20: cols - cols // 20]
+    step = max(1, int(math.sqrt(inner.size / 400_000)))
+    return _density(inner[::step, ::step], exposure)
+
+
+def _tone(v, tone):
+    if tone == "nikon":
+        lift, gain, gamma = NIKON_TONE
+        np.power(v, gamma, out=v)
+        v *= gain
+        v += lift
+        np.clip(v, 0, 1, out=v)
+    return v
+
+
+def frame_colour(planes, exposures):
+    """What a film profile is made from: for red, green and blue, the thinnest and the densest film
+    in this frame (its 0.1% and 99.9% points), as densities with the exposure taken out.
+
+    planes: [red, green, blue] as scanned; exposures: the pass's, by colour name. None when either
+    is missing, since without the exposure two frames cannot be compared.
+    """
+    try:
+        times = [float(exposures[k]) for k in ("red", "green", "blue")]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(planes) != 3 or min(times) <= 0:
+        return None
+    lo, hi = [], []
+    for p, e in zip(planes, times):
+        a, b = np.percentile(_inner_sample(p, e), (0.1, 99.9))
+        lo.append(round(float(a), 4))
+        hi.append(round(float(b), 4))
+    return {"lo": lo, "hi": hi}
+
+
+FILM_PROFILE_LEAST = 3  # frames a film profile needs at the very least
+
+
+def film_profile_from(frames):
+    """A film profile from the measurements of several frames of one film (`frame_colour` results).
+
+    Per colour: the film's thinnest point is where the least dense frames start (the film base
+    and a little more), its densest point where the densest frames end. One frame with a hole in
+    it or a blown-out lamp must not set either, so the outermost tenth of the frames is left out.
+    Returns None with fewer than FILM_PROFILE_LEAST frames or when the film has no range.
+    """
+    good = [f for f in frames if isinstance(f, dict) and len(f.get("lo", ())) == 3 and len(f.get("hi", ())) == 3]
+    if len(good) < FILM_PROFILE_LEAST:
+        return None
+    lo = [float(np.percentile([f["lo"][c] for f in good], 10)) for c in range(3)]
+    hi = [float(np.percentile([f["hi"][c] for f in good], 90)) for c in range(3)]
+    if min(h - a for a, h in zip(lo, hi)) < 0.05:
+        return None
+    return {"lo": [round(v, 4) for v in lo], "hi": [round(v, 4) for v in hi], "frames": len(good)}
+
+
+def _usable_profile(profile, planes, exposures):
+    """The profile's numbers and the exposures as lists, or None when this frame cannot use a profile."""
+    if not profile or len(planes) != 3:
+        return None
+    try:
+        lo, hi = [float(v) for v in profile["lo"]], [float(v) for v in profile["hi"]]
+        times = [float(exposures[k]) for k in ("red", "green", "blue")]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(lo) != 3 or len(hi) != 3 or min(times) <= 0 or min(h - a for a, h in zip(lo, hi)) < 0.05:
+        return None
+    return lo, hi, times
+
+
+def invert_negative(planes, tone="nikon", profile=None, exposures=None):
     """Turn negative planes (uint16) into a positive picture, values 0..1 (float32).
 
-    Each channel becomes film density, stretched between its own darkest and
-    lightest 0.2%, measured inside the frame (not on the clear edges). The
-    per-channel stretch takes off the orange mask. Density already follows
-    brightness as the eye sees it, so no gamma is added.
+    Without a film profile each channel becomes film density, stretched between its own
+    darkest and lightest 0.1%, measured inside the frame (not on the clear edges). The
+    per-channel stretch takes off the orange mask. Density already follows brightness as
+    the eye sees it, so no gamma is added.
+
+    With a film profile (and the pass's exposures) the three colours are lined up by the
+    film's own numbers instead of by this frame's contents, so a frame full of one colour
+    keeps it and every frame of the roll gets the same colour. Brightness is then stretched
+    for the frame as a whole, by the same amount for all three colours.
     """
-    out = []
-    for p in planes:
-        rows, cols = p.shape
-        inner = p[rows // 20: rows - rows // 20, cols // 20: cols - cols // 20]
-        step = max(1, int(math.sqrt(inner.size / 400_000)))
-        sample = -np.log10(np.maximum(inner[::step, ::step].astype(np.float32), 1.0) / 65535.0)
-        lo, hi = np.percentile(sample, (0.1, 99.9))
-        v = -np.log10(np.maximum(p.astype(np.float32), 1.0) / 65535.0)
-        v -= lo
-        v /= max(hi - lo, 1e-6) / (1 - 2 * HEADROOM)
-        v += HEADROOM  # keep a little room at both ends, as Nikon Scan does, for editing later
-        np.clip(v, 0, 1, out=v)
-        if tone == "nikon":
-            lift, gain, gamma = NIKON_TONE
-            np.power(v, gamma, out=v)
-            v *= gain
-            v += lift
+    use = _usable_profile(profile, planes, exposures)
+    if use is None:
+        out = []
+        for p in planes:
+            lo, hi = np.percentile(_inner_sample(p), (0.1, 99.9))
+            v = _density(p)
+            v -= lo
+            v /= max(hi - lo, 1e-6) / (1 - 2 * HEADROOM)
+            v += HEADROOM  # keep a little room at both ends, as Nikon Scan does, for editing later
             np.clip(v, 0, 1, out=v)
-        out.append(v)
+            out.append(_tone(v, tone))
+        return out
+    lo, hi, times = use
+    ends = []
+    for p, e, a, b in zip(planes, times, lo, hi):
+        s = (_inner_sample(p, e) - a) / (b - a)
+        ends.append(np.percentile(s, (0.1, 99.9)))
+    black, white = min(e[0] for e in ends), max(e[1] for e in ends)  # no colour is cut off at either end
+    span = max(float(white - black), 1e-6)
+    out = []
+    for p, e, a, b in zip(planes, times, lo, hi):
+        v = _density(p, e)
+        v -= np.float32(a + black * (b - a))
+        v /= np.float32((b - a) * span / (1 - 2 * HEADROOM))
+        v += HEADROOM
+        np.clip(v, 0, 1, out=v)
+        out.append(_tone(v, tone))
     return out
 
 
-def display_image(planes, film, invert=True, tone="nikon", restore=0):
+def shrink(plane, side=PREVIEW_MAX_SIDE):
+    """A plane made smaller for the screen by averaging blocks of pixels, so its longer side fits in `side`."""
+    f = math.ceil(max(plane.shape) / side)
+    if f <= 1:
+        return plane
+    rows, cols = plane.shape[0] // f * f, plane.shape[1] // f * f
+    small = plane[:rows, :cols].reshape(rows // f, f, cols // f, f).mean(axis=(1, 3), dtype=np.float32)
+    return (small + 0.5).astype(plane.dtype)
+
+
+def display_image(planes, film, invert=True, tone="nikon", restore=0, profile=None, exposures=None):
     """Turn scanner planes (dict name -> uint16) into an 8-bit picture for the browser."""
     names = [n for n in ("red", "green", "blue") if n in planes] or [next(iter(planes))]
     stack = [planes[n] for n in names]
@@ -58,7 +165,7 @@ def display_image(planes, film, invert=True, tone="nikon", restore=0):
     out = []
     if film in ("negative", "mono") and invert:
         # the same conversion as "save as positive", so the preview shows what is saved
-        for v in restore_colour(invert_negative([p[::step, ::step] for p in stack], tone), restore):
+        for v in restore_colour(invert_negative([p[::step, ::step] for p in stack], tone, profile, exposures), restore):
             out.append((v * 255 + 0.5).astype(np.uint8))
         return np.dstack(out) if len(out) == 3 else out[0]
     for p in stack:
@@ -161,6 +268,23 @@ def icc_profile(name):
               + b"\0" * 4 + b"\0" * 8 + b"\0" * 4 + b"".join(_s15(c) for c in _D50) + b"\0" * 4)
     header += b"\0" * (128 - len(header))
     return header + struct.pack(">I", len(tags)) + table + data
+
+
+def to_srgb8(planes, space):
+    """Saved 16-bit planes as an 8-bit picture a browser shows right (sRGB), for looking at results.
+
+    `space` is the colour space the planes are in. One the app does not know (scanner RGB) is
+    shown as it is, which is close enough to compare results with each other.
+    """
+    if len(planes) != 3:
+        return (planes[0] >> 8).astype(np.uint8)
+    rgb = np.stack([p.astype(np.float32) / 65535 for p in planes], axis=-1)
+    if space in COLOUR_SPACES and space != "sRGB IEC61966-2.1":
+        gamma = COLOUR_SPACES[space][2]
+        lin = _decode_srgb(rgb) if gamma == "srgb" else np.power(rgb, gamma)
+        m = np.linalg.inv(_space_matrix("sRGB IEC61966-2.1")[0]) @ _space_matrix(space)[0]
+        rgb = _encode(lin @ m.T.astype(np.float32), "srgb")
+    return (np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)
 
 
 class ScannerProfile:

@@ -26,6 +26,7 @@ python coolscan.py
 You see `(.venv)` at the start of the Terminal prompt while the environment is on.
 Your browser opens on the app. Press Ctrl-C in Terminal to quit.
 To try the screens without the scanner: `python coolscan.py --demo`.
+To compare settings on one frame: `python coolscan.py --test` (see "Test mode" below).
 
 ## How the app is put together
 
@@ -36,19 +37,65 @@ one file per job:
 | --- | --- |
 | `app.py` | the scanner session: connect, thumbnail, preview, focus, exposure, film watcher |
 | `scanning.py` | scanning frames and saving them, scan log, scan times |
-| `rolls.py` | file names, roll folders, roll numbers, film descriptions |
+| `rolls.py` | file names, roll folders, roll numbers, film descriptions, film profiles |
 | `settings.py` | the settings and how they are kept between runs |
 | `colour.py` | negative to positive, pictures for the screen, colour spaces and profiles |
 | `dust.py` | dust and scratch removal from the infrared picture |
-| `enhance.py` | grain reduction, faded-colour restoration, lining passes up |
-| `imaging.py` | writing TIFF and PNG files |
+| `enhance.py` | grain reduction, faded-colour restoration, lining passes up, putting two exposures together |
+| `imaging.py` | writing TIFF and PNG files, reading a saved TIFF back |
 | `notify.py` | banner, shortcut and ntfy messages |
 | `driver.py` | the stall check, and the driver's failures in plain words |
 | `demo.py` | the pretend scanner |
+| `testmode.py` | test mode: the queue of runs on one frame, and its results |
 | `server.py` | the web page's server and the start-up |
-| `web/` | the page itself: `index.html`, `style.css`, `app.js` |
+| `web/` | the page itself: `index.html`, `style.css`, `app.js`; test mode's page: `test.html`, `test.js` |
 
 Settings and the current roll stay in `~/.coolscan.json`, as before.
+
+## The screen
+
+The bar at the top says what the scanner is doing and holds the main buttons: Connect, Load,
+Eject, Thumbnail, Preview and the blue **Scan** button. While something runs, the bar shows the
+progress and the times, and Stop becomes available.
+
+On the right are the film and the picture:
+
+- **Frames**: the frames of the strip as small pictures in two rows. They appear by themselves
+  after the thumbnail pass. Under them, "Whole strip" unfolds the thumbnail pass as the scanner
+  saw it.
+- **Looking and ticking are two things.** Click a frame to look at it: it gets a blue edge and
+  fills the big picture below. Tick a frame (its box, or ⌘-click, or the X key; Shift-click
+  ticks a run) to choose it for scanning. With nothing ticked, Scan takes the whole strip and
+  the button says "Scan all 6 frames"; with some ticked it says "Scan 2 selected frames".
+  Ticks are dropped when another strip goes in.
+- **The big picture** shows the frame you clicked, and a label says where the picture comes
+  from: **Thumbnail** (cut from the thumbnail pass, small and rough), **Preview** (after you
+  asked for a preview scan) or **Scan** (the picture that was just saved, shown after the frame
+  is scanned). A scanned frame also lists the files it was saved as and how long it took.
+- **Preview scan**: an extra, never needed before scanning. It scans the frame you are looking
+  at (or the ticked ones) at the preview resolution so you can judge it better than the
+  thumbnail allows.
+- **Enlarge**: double-click a frame or the big picture, or press Space, to see it as large as
+  the window. Click or press Esc to go back.
+- **Crop**: press Crop and drag a box on the big picture. That part of the frame is what gets
+  saved when the frame is scanned (also its `_IR.tif`). In Archive mode `RAW/` always keeps the
+  whole frame and only `Positive/` is cropped. The crop belongs to that frame of that strip,
+  turns with the frame, and is forgotten with the next strip. "Clear crop" removes it. A crop
+  made after a frame was scanned applies to the next scan of it, not to the file already saved.
+- **Keys**: ← → ↑ ↓ look at another frame, X ticks it, ⌘A ticks all, Space enlarges, C crops,
+  [ and ] turn the frame, P preview scan, T thumbnail, ⌘Return scan, Esc leaves crop or enlarge.
+
+On the left are the settings, in boxes that fold away. Click a box's title to fold or unfold it;
+a folded box shows its main choices in a few words, and the app remembers which boxes you keep
+open. The "?" on a box shows a short explanation of what is in it.
+
+- **Saved settings**: "Save as…" keeps the scan settings under a name (for example "Portra,
+  archive" or "Quick look"), the list switches between them, and "Delete" removes one. Saved
+  under a name that exists, the settings are updated. What is kept is how to scan and save
+  (film type, resolution, dust removal, focus and exposure choices, colour, file name choices,
+  what happens when a strip is done). The folder, the roll and its film details, and the
+  message settings are not part of it, so loading a set never moves you to another roll. When
+  the settings in use differ from every saved set, the list says "Not saved".
 
 ## What the buttons do
 
@@ -58,32 +105,43 @@ Settings and the current roll stay in `~/.coolscan.json`, as before.
   itself, like Nikon Scan. A slide has no thumbnail pass, so it gets a preview scan instead.
   After Eject the same strip is not taken back in: the app waits until the scanner says the
   film is out. If the pass fails it is not tried again until film goes in again.
-- **Preview**: a preview of each frame (or the selected ones). "Preview from" picks how:
-  - *Preview scan*: a low-resolution scan of each frame (sharper, slower).
-  - *Thumbnail (fast)*: cuts each frame out of the thumbnail pass, so nothing is scanned again.
+- **Preview**: a low-resolution scan of the frame you are looking at, or of the ticked frames,
+  to replace its thumbnail in the big picture with something sharper. (The old choice "Preview
+  from: thumbnail" is gone, because every frame now shows its thumbnail by itself.)
 - **Focus & exposure** has two parts. The buttons under "Do once, now" act once, right away, on
-  the selected frame. The choices under "Settings" are used for every preview and scan.
-  - **Calibrate**: autofocus and auto exposure on the selected frame, then switches the settings
+  the frame you are looking at. The choices under "Settings" are used for every preview and scan.
+  - **Calibrate**: autofocus and auto exposure on that frame, then switches the settings
     to keep that focus and exposure for every preview and scan (like locking AE in Nikon Scan).
-  - **Autofocus** / **Auto exposure**: either one on its own. "Pick" lets you click a preview to
-    choose the focus point. "Reset" goes back to focusing and exposing each frame on its own.
+  - **Autofocus** / **Auto exposure**: either one on its own. "Pick" lets you click the big
+    picture to choose the focus point. "Reset" goes back to focusing and exposing each frame on its own.
   - With "Autofocus each frame once" (the default) the scanner focuses each frame one time, and
     the lens is then left where it is for that frame's passes.
 - **Rotate all 180°**: turns every preview and every saved scan.
-- **Rotate selected ⟲ / ⟳ 90°**: turns the selected frames. Click selects one frame,
-  ⌘-click adds or removes one, Shift-click selects a range.
+- **⟲ / ⟳** above the big picture: turn the frame you are looking at (or the ticked ones) by
+  90°, on the screen and in the saved scan.
 - **Scan all frames** (batch scan): scans every frame on the strip, one after the other, into the
-  roll folder with continuing numbers. Select frames first and the button becomes
+  roll folder with continuing numbers. Tick frames first and the button becomes
   "Scan N selected frames" and scans only those. Full scans are saved as 16-bit TIFF.
 - **Also save the infrared picture (_IR.tif)**: when ticked, each frame gets a second file ending
   in `_IR.tif`, a grey picture that shows only the dust and scratches. It is an extra for
   checking or for other software. Dust removal works the same with it unticked, and "Negatives
   saved as" has nothing to do with it.
-- **Dust & scratch removal**: uses the infrared channel to find dust and scratches and rebuilds
-  the picture under them. The method is nkscan's. "Dust removal by" picks where it runs:
-  *Built in (one pass)* cleans the scan in the app, *Driver, second pass* is the older, slower
-  way. A third choice, *Nikon ICE (helper)*, only shows when a working `ice_clean` helper sits
-  next to `coolscan.py`; on this Mac it does not, so the choice is hidden.
+- **Dust & scratch removal**: uses the infrared picture to find dust and scratches. "Dust
+  removal by" picks the method:
+  - *Built in* (the default): the app's own cleaner, tuned on five real negatives until its
+    result lined up with Nikon Scan's Digital ICE on the same scans. It leaves a pixel exactly
+    as scanned unless its infrared is clearly darker than the rest of the film (about one pixel
+    in eight on those frames), gives light dirt its light back, and fills heavy dirt from the
+    clean film around it. It adds no grain. It runs in the app right after the pass, about a
+    second a frame.
+  - *Driver (older method)*: nkscan's own cleaner, which the app used before. It rebuilds about
+    four pixels in ten, brightens clean film a little and adds grain of its own. Kept so you
+    can compare, or go on with a roll you started with it. In Archive mode it needs a second
+    pass.
+  - *Nikon ICE (helper)* only shows when a working `ice_clean` helper sits next to
+    `coolscan.py`; on this Mac it does not, so the choice is hidden.
+
+  Nikon's ICE was only used as something to compare against. No Nikon code is in the app.
 - **Grain reduction** (off by default, levels 1 to 4): smooths film grain and keeps edges and
   texture, like Nikon's GEM. Our own method, not Nikon's.
 - **Restore faded colours** (off by default; low, medium, high): lines up the three colours of a
@@ -93,6 +151,17 @@ Settings and the current roll stay in `~/.coolscan.json`, as before.
   used ("one pass"). If it reads each line once, 2x and 4x scan the frame that many times at the
   same focus and exposure and average the passes; a pass that lands more than half a pixel off
   is left out. The Activity list says which kind your scanner is when it connects.
+- **Multi-Exposure** (off by default; 2x or 4x longer): scans each frame twice, the second time
+  with the exposure that many times longer and the lens where the first pass left it, and puts
+  the two together: where the film is dense the picture is read from the longer pass (less
+  noise there), where the longer pass burns out it stays the normal pass, with a smooth
+  change in between. Dense film means the shadows of a slide and the highlights of a
+  negative, so it helps slides most; on negatives the gain is small. Each frame takes at
+  least twice as long. The infrared is read once, in the normal pass. If the scanner will
+  not take the longer exposure, or the second pass comes back another size, more than half a
+  pixel off or does not fit the first, the frame is saved from the normal pass alone and the
+  Activity list says why. It cannot be combined with multi-sample by averaging passes, and
+  with it on, dust removal is always done by the app ("Driver" can only clean one pass).
 
 - **Negatives saved as**: Positive (default, like Nikon Scan), Negative (raw) or Both.
 - **Archive mode**: saves two folders in the target folder. `RAW/` holds the untouched scan with
@@ -109,6 +178,31 @@ Settings and the current roll stay in `~/.coolscan.json`, as before.
   already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
   another number to carry on from there; it is used for the next batch, then the roll counts on
   by itself again. A name that is already taken is skipped. Nothing is ever overwritten.
+- **Colour of negatives** (in the Film box, for colour negatives): where the colour of the
+  finished picture comes from.
+  - *Each frame on its own* (the default, and how it always worked): each of red, green and
+    blue is stretched between the thinnest and densest film in that one frame. That takes the
+    orange mask off and suits ordinary pictures. It goes wrong when a frame is mostly one colour
+    (grass, a sunset, blue sky): the app cannot tell that from a colour cast and takes it out.
+  - *A film profile*: the colour comes from the film instead of from the frame. The app measures
+    every frame as it is scanned (the thinnest and densest film in each colour, with the
+    scanner's exposure taken out so that frames can be compared) and keeps the numbers in
+    `FilmColour.json` in the roll's folder. **Save this roll's film…** turns the measurements of
+    the roll you are in into a profile under a name you give, for example "Kodak Gold 200". It
+    needs at least 3 scanned frames; a whole strip or a whole roll is better, and frames with
+    deep shadows and bright highlights help most. Pick the profile under "Colour from" and
+    every frame scanned after that gets the same colour: a grey wall stays grey even in a frame
+    full of grass. Brightness is still set frame by frame, by the same amount for all three
+    colours. Use it for the rest of that roll and for later rolls of the same film.
+  - A profile is switched off when you start a new roll (it may be another film) and comes back
+    when you go back to a roll that used it. It is part of saved settings. Thumbnails are always
+    shown "each frame on its own", because the thumbnail pass has no exposure to go by; a preview
+    scan and the scan itself show the profile's colour.
+  - These are not maker's profiles like SilverFast's NegaFix, which are measured film by film
+    on each scanner model. The numbers here come from your own film on your own scanner, which
+    is the only place accurate ones can come from without that kind of measuring. A profile
+    made from a roll with odd lighting carries that into every roll you use it on; delete it and
+    save it again from a better roll.
 - **Negative tone**: "Flat" (default) keeps the plain conversion, lighter and lower in contrast,
   as a starting point for editing (for example Lightroom's Auto). "Nikon Scan look" gives
   negatives the same brightness and contrast as Nikon Scan, measured on five frames scanned in
@@ -172,8 +266,67 @@ Settings and the current roll stay in `~/.coolscan.json`, as before.
   scanner never had to wait for the computer" or for how long it waited. The driver's own
   notes are in `~/.coolscan-driver.log`, started fresh each time the app starts.
 
-Previews of negatives are inverted so you can judge them. Negatives are saved as positives unless
+Pictures of negatives on the screen are inverted so you can judge them. Negatives are saved as positives unless
 you choose otherwise under "Negatives saved as".
+
+## Test mode
+
+For finding out what a setting really does on your film: one frame, scanned or worked out again
+with several sets of settings, each result saved under its own name so you can put them side by
+side. It is a separate way of starting the app and does not appear on the ordinary screen:
+
+```
+cd ~/Documents/GitHub/nikon_scan_project
+source .venv/bin/activate
+python coolscan.py --test
+```
+
+The browser opens on the test page (http://127.0.0.1:8765/test). "Normal screen" at the top
+right goes to the ordinary screen, which works as always; the settings set there are the ones
+the runs start from.
+
+1. **Frame to test**: click the frame. (Thumbnail in the bar finds the frames if they are not
+   there yet.)
+2. **Queue**: under "Add a run", leave everything on "As it is" to scan with the settings in
+   use, or change one or more of: resolution, multi-sample, Multi-Exposure, dust removal on or
+   off and by which method, grain reduction, restore faded colours, negative tone, colour of
+   negatives (film profile) and colour space. "Starts from" lets a run begin from one of your
+   saved settings instead of the settings in use. A label is optional; without one the run is
+   named after what it changes ("dust removal off", "Slides, 1450 dpi"). The queue is kept
+   between starts of the app, up to 40 runs.
+3. **Run the queue**, then look at **Results**: each run shows the whole frame, a piece of it at
+   full size (one pixel of the scan to one pixel of the screen), how long it took and what the
+   time went on, and the files it saved. Click a spot on any whole frame and every result shows
+   that spot at full size; click a piece to see it larger. Stop ends the queue after the step
+   it is on.
+
+What to know:
+
+- **Runs share a pass where they can.** Two runs that need the same pass over the film (same
+  resolution, multi-sample, Multi-Exposure, film type, focus and exposure) use one scan, and
+  only the work after the pass is done again. So "dust removal on" against "dust removal off",
+  or two tones, or two colour spaces, differ only by that setting and not by the noise of
+  another pass, and the second one takes seconds. Its time says "using the pass of an earlier
+  run". Tick **Own scan** when you want a run to scan again anyway, for example to see how much
+  two passes of the same frame differ. The frame is focused once and every pass of the test
+  uses that lens position.
+- **Where the results go**: a new folder for every test inside the target folder,
+  `Tests/20261123-101500 frame 3/`, holding `01 Settings in use.tif`, `02 dust removal off.tif`
+  and so on (in `RAW/` and `Positive/` if a run is in Archive mode), plus `Test log.txt` with
+  each run's settings, files and time. The infrared picture, when "Also save the infrared
+  picture" is on, is saved once for a pass and not again for each run that shares it.
+- **Tests stay out of your roll.** Nothing is written into a roll folder, the roll's next
+  number does not move, test frames are not measured for film profiles, and the ordinary
+  screen keeps the picture it had. The settings in use are put back when the queue ends,
+  whether it finished, was stopped or failed, and cannot be changed while it runs.
+- **Turn and crop** of the frame apply to the test as they would to a scan of it.
+- A run that fails is marked and the queue goes on with the next; a lost scanner ends it.
+- A finished picture stretched "each frame on its own" changes all over when dust is removed,
+  a little, because the dust shifts what counts as its darkest and lightest part. To see only
+  what the cleaner touched, set "Negatives saved as" to "Negative (raw)" on the ordinary
+  screen before running the test: the files are then saved as scanned.
+- Full-resolution passes are large (about 90 MB each while a test runs, with the infrared).
+  They are let go when the queue ends.
 
 ## When something goes wrong
 
@@ -184,13 +337,49 @@ brackets (send that part along if you report a problem).
 - **There is no film**: feed the strip in again. Nikon's driver rewinds a strip that has sat idle
   for a while. The app notices that the film moved, takes it in again if it can, and finds the
   frames again before the next preview or scan.
-- **Autofocus failed**: press Pick, click a part of the preview with clear detail, try again.
+- **Autofocus failed**: press Pick, click a part of the big picture with clear detail, try again.
 - **Banding after the same strip sat in the scanner for a long time**: Nikon's help says the
   scanner calibrates itself each time film is changed, so press Eject and feed the strip again.
   (nkscan has no separate "calibrate the scanner" command.)
 - **Hardware error**: switch the scanner off and on, then press Connect.
 
 ## Tested so far
+
+Added on the night of 2026-11-22, none of it run on the scanner or on the Mac yet:
+
+- Multi-Exposure: tested with made-up passes and the pretend scanner only (36 checks). There
+  the dark end of a scan comes out about half as noisy at 2x and a quarter at 4x, with no
+  step where the passes meet, and a lamp a few percent off between the passes is measured and
+  taken out. **Not tried on the scanner.** Two things only the scanner can show: whether it
+  takes an exposure two or four times its own (if not, the frame is saved from the normal
+  pass and the Activity list says so), and how well two passes of real film line up.
+- Test mode: tested with the pretend scanner (78 checks) and a run through its page in a
+  browser: the queue, runs starting from saved settings, sharing a pass and asking for an own
+  scan, the saved files and the test log, times, a failing run, Stop, a lost scanner, and
+  that the settings and the roll are left as they were. Not run on the scanner or the Mac.
+- Film profiles: tested on a made-up roll only (an orange mask, a different contrast for each
+  colour, every frame exposed on its own, the way this scanner exposes negatives). There the
+  profile finds the film's numbers within a few percent and a grey card stays grey in frames
+  full of green, orange or blue, where "each frame on its own" turns it clearly coloured. In the
+  app: 51 checks with the pretend scanner and a run through the page. **No real film has been
+  through it.** It rests on one thing that only the scanner can confirm: that twice the exposure
+  reads twice the light (the driver gives the exposure as a time, so it should). If colours with
+  a profile look wrong on your film, switch back to "Each frame on its own" and tell me.
+  With that choice nothing about the pictures changes: they come out the same to the last digit
+  as before profiles existed.
+
+- The new screen (frames in two rows, looking and ticking, the big picture and its Thumbnail,
+  Preview and Scan labels, enlarge, crop, the keys, folding boxes, saved settings): tested with
+  the pretend scanner, by checks on the app (51 of them) and by a run through the page in a
+  browser, in light and dark mode. Crop was checked on the saved files: their size, the
+  infrared file, Archive mode, and a frame turned by 90°.
+- The built-in dust cleaner tuned to Nikon's ICE: measured in the cloud on five real
+  colour-negative frames from this scanner at 2900 dpi, against ICE's result on the same
+  pixels (per-pixel difference from ICE 0.25%, before 1.71%; 12% of the frame changed, before
+  42%, ICE 12.5%). Not tried on slides or at other resolutions, where there is no ICE result
+  to compare with. Using it for ordinary scans (not only Archive mode) is new and was tested
+  with the pretend scanner only.
+
 
 Added late on 2026-11-22, tested with the pretend scanner and a browser only: scan times, the
 stall check (its reading of the driver's notes was tested on made-up lines in the driver's
