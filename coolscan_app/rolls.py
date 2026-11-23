@@ -6,7 +6,7 @@ import re
 import time
 from pathlib import Path
 
-from .colour import FILM_PROFILE_LEAST, film_profile_from
+from .imaging.colour import FILM_PROFILE_LEAST, film_profile_from
 
 DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll's folder
 COLOUR_FILE = "FilmColour.json"         # what each scanned frame's film measured, kept in each roll's folder

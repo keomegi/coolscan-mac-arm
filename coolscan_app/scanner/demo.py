@@ -1,5 +1,6 @@
 """A pretend scanner, so the screens can be tried without hardware."""
 
+import os
 import threading
 import time
 
@@ -30,6 +31,7 @@ class _Demo:
         self.medium_changes = 0  # like nkscan: counts a strip or holder going in or out
         self.strip_frames = 6    # how many frames the strip in the scanner has
         self.focus_moves = 0     # how often a pass asked for the lens to be moved
+        self.borders = bool(os.environ.get("COOLSCAN_DEMO_BORDERS"))  # True: the film's edges show as dark bands and the gaps as clear film (for Auto crop)
 
     @property
     def capabilities(self):
@@ -42,6 +44,19 @@ class _Demo:
         g = (np.sin(x / (cols / 7 + seed)) + np.cos(y / (rows / 5))) * 0.25 + 0.5
         base = {"red": 0.85, "green": 0.55, "blue": 0.35}  # orange-ish negative
         return {k: (np.clip(g * b + 0.05, 0, 1) * 60000).astype(np.uint16) for k, b in base.items()}
+
+    @staticmethod
+    def _edges(planes, gaps, share=0.04):
+        """Dark bands where the film's edges are (top and bottom rows) and, with `gaps` (columns at
+        the left and right), clear film where the frame ends: what Auto crop looks for."""
+        for p in planes.values():
+            rows = p.shape[0]
+            band = max(1, int(rows * share))
+            p[:band] = 400
+            p[rows - band:] = 400
+            if gaps:
+                p[band:rows - band, :gaps[0]] = 65535
+                p[band:rows - band, p.shape[1] - gaps[1]:] = 65535
 
     def _wait(self, progress, phase, steps=10, dt=0.12):
         for i in range(steps):
@@ -71,6 +86,8 @@ class _Demo:
         d = self.Disc()
         cols, rows = 6 * 140, 96
         d.thumbnail = self._film(rows, cols, 1)
+        if self.borders:
+            self._edges(d.thumbnail, None, 0.11)  # the thumbnail reaches past the frames: wider bands, so some shows in each frame
         d.column_addresses = [i * 100 for i in range(cols)]
         d.row_addresses = [rows * 10 - i * 10 for i in range(rows)]
         d.frames = [(i * 14000 + 600, 50, i * 14000 + 13400, 900) for i in range(self.strip_frames)]
@@ -115,7 +132,10 @@ class _Demo:
         share = (c1 - c0) * (r1 - r0) / (full_cols * full_rows)  # less to send, so a shorter pass
         self._wait(progress, "scan", max(2, int(round((10 if dpi < 1000 else 30) * share))))
         rows, cols = r1 - r0, c1 - c0
-        r.colors = {n: np.ascontiguousarray(p[r0:r1, c0:c1]) for n, p in self._film(full_rows, full_cols, top % 7).items()}
+        film = self._film(full_rows, full_cols, top % 7)
+        if self.borders:
+            self._edges(film, (int(full_cols * 0.03), int(full_cols * 0.025)))
+        r.colors = {n: np.ascontiguousarray(p[r0:r1, c0:c1]) for n, p in film.items()}
         rng = np.random.default_rng()
         usual = {"red": 1200, "green": 900, "blue": 700}
         for name, plane in r.colors.items():  # noise that differs on every pass, like the real thing

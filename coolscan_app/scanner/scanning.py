@@ -10,11 +10,11 @@ from pathlib import Path
 
 import numpy as np
 
-from .colour import COLOUR_SPACES, NIKON_MODEL_NAMES, convert_planes, frame_colour, invert_negative, shrink
+from ..imaging.colour import COLOUR_SPACES, NIKON_MODEL_NAMES, convert_planes, frame_colour, invert_negative, shrink
 from .driver import Cancelled, _lost_scanner, _stopped, _this_frame_only, clock, explain
-from .dust import dust_clean
-from .enhance import merge_exposures, pass_shift, reduce_grain, restore_colour
-from .imaging import read_tiff_rgb16, write_tiff
+from ..imaging.dust import dust_clean
+from ..imaging.enhance import merge_exposures, pass_shift, reduce_grain, restore_colour
+from ..imaging.files import read_tiff_rgb16, write_tiff
 
 
 #
@@ -27,7 +27,7 @@ from .imaging import read_tiff_rgb16, write_tiff
 #
 # Exit code 0 means OUTPUT.tif is good. Anything else: the built-in method is used.
 
-ICE_HELPER = Path(__file__).resolve().parent.parent / "ice_clean"
+ICE_HELPER = Path(__file__).resolve().parents[2] / "ice_clean"
 ICE_TIMEOUT = 600  # seconds per frame
 
 

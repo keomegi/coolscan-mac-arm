@@ -111,12 +111,17 @@ body.picking #cropbox{pointer-events:none}
 #cropbox .n{top:-8px}#cropbox .s{bottom:-8px}
 #cropbox .e,#cropbox .w{top:16px;bottom:16px;width:16px;cursor:ew-resize}
 #cropbox .e{right:-8px}#cropbox .w{left:-8px}
-#cropbox .n::after,#cropbox .s::after{left:50%;top:50%;width:24px;height:5px;margin:-2.5px 0 0 -12px}
-#cropbox .e::after,#cropbox .w::after{left:50%;top:50%;width:5px;height:24px;margin:-12px 0 0 -2.5px}
+/* the marks sit just inside the box, so they show even when it reaches the picture's edge */
+#cropbox .n::after,#cropbox .s::after{left:50%;width:24px;height:5px;margin-left:-12px}
+#cropbox .n::after{top:9px}#cropbox .s::after{bottom:9px}
+#cropbox .e::after,#cropbox .w::after{top:50%;width:5px;height:24px;margin-top:-12px}
+#cropbox .w::after{left:9px}#cropbox .e::after{right:9px}
 #cropbox .nw,#cropbox .ne,#cropbox .sw,#cropbox .se{width:20px;height:20px}
 #cropbox .nw{left:-10px;top:-10px;cursor:nwse-resize}#cropbox .se{right:-10px;bottom:-10px;cursor:nwse-resize}
 #cropbox .ne{right:-10px;top:-10px;cursor:nesw-resize}#cropbox .sw{left:-10px;bottom:-10px;cursor:nesw-resize}
-#cropbox .nw::after,#cropbox .ne::after,#cropbox .sw::after,#cropbox .se::after{left:5px;top:5px;width:10px;height:10px}
+#cropbox .nw::after,#cropbox .ne::after,#cropbox .sw::after,#cropbox .se::after{width:10px;height:10px}
+#cropbox .nw::after{left:10px;top:10px}#cropbox .ne::after{right:10px;top:10px}
+#cropbox .sw::after{left:10px;bottom:10px}#cropbox .se::after{right:10px;bottom:10px}
 .mark{position:absolute;width:16px;height:16px;margin:-8px;border:2px solid #ffd60a;border-radius:50%;pointer-events:none}
 #vsaved{margin:8px 0 0}
 

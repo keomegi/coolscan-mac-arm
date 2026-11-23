@@ -24,10 +24,19 @@ scans/
 Tests/
 
 # Test mode itself, kept local only like notify.py: the app runs without it (never commit)
+coolscan_app/extras/testmode.py
 coolscan_app/testmode.py
 coolscan_app/web/test.html
 coolscan_app/web/test.js
-tests/
+# ...and the checks of test mode (the rest of checks/ is committed and runs on GitHub)
+checks/scripts/test_test.py
+checks/scripts/strip_test_test.py
+checks/scripts/preview_test_test.py
+checks/page/page_test_mode.js
+checks/page/page_strip_test.js
+checks/page/page_preview_test.js
+.pytest_cache/
+node_modules/
 
 # Driver probes and logs from troubleshooting
 *_probe.py
@@ -46,4 +55,5 @@ app_scan.iso
 *.cab
 
 # Optional module, kept local only (never commit)
+coolscan_app/extras/notify.py
 coolscan_app/notify.py

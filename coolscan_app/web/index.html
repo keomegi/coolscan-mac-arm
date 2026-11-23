@@ -74,6 +74,7 @@
 <details class="card" id="g-save" open><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <label class="row"><span>Archive mode (RAW + Positive)</span><input type="checkbox" id="s-archive"></label>
 <label class="row" id="cropscanrow"><span>Scan only the cropped part</span><input type="checkbox" id="s-crop_scan"></label>
+<label class="row"><span>Crop each frame automatically</span><input type="checkbox" id="s-auto_crop"></label>
 <label class="row" id="negrow"><span>Negatives saved as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
@@ -140,7 +141,7 @@
 <div class="head"><h2 id="vtitle">Preview</h2><span class="chip" id="vsrc" hidden></span><span class="hint" id="vinfo"></span><span class="grow"></span>
 <button id="b-sharper" title="A quick preview scan of this frame, sharper than the thumbnail">Preview scan</button>
 <button class="icon" id="b-rl" title="Turn 90° left ( [ )" aria-label="Turn left">⟲</button><button class="icon" id="b-rr" title="Turn 90° right ( ] )" aria-label="Turn right">⟳</button>
-<button id="b-crop" aria-pressed="false" title="Drag on the picture to choose the part that is saved (C)">Crop</button><button id="b-cropclear" hidden>Clear crop</button>
+<button id="b-crop" aria-pressed="false" title="Show the crop box and drag its sides or corners to choose the part that is saved (C)">Crop</button><button id="b-autocrop" title="Find the picture in the frame and crop to it, leaving out the film's edges, the holder and the gap between frames">Auto crop</button><button id="b-cropclear" hidden>Clear crop</button>
 <button id="b-zoom" title="Enlarge (Space, or double-click the picture)">Enlarge</button></div>
 <div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden title="Drag a side or corner to change the crop, or the middle to move it"><i class="h n" data-h="n"></i><i class="h s" data-h="s"></i><i class="h e" data-h="e"></i><i class="h w" data-h="w"></i><i class="h nw" data-h="nw"></i><i class="h ne" data-h="ne"></i><i class="h sw" data-h="sw"></i><i class="h se" data-h="se"></i></div><div class="mark" id="fmark" hidden></div></div>
 <p class="hint" id="vempty">Click a frame above to see it here.</p></div>

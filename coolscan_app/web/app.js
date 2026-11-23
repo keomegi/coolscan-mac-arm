@@ -26,7 +26,7 @@ function tile(i) { return (S && S.tiles && S.tiles[i]) || {}; }
 const keys = ['film', 'format', 'preview_dpi', 'invert_preview', 'rotate180', 'focus_mode', 'focus_position', 'exposure_mode',
   'white_balance', 'dpi', 'samples', 'ir', 'clean', 'negatives', 'archive', 'outdir', 'basename', 'digits', 'start', 'photo_date',
   'colour_space', 'name_date', 'tone', 'stop_on_errors', 'eject_after', 'scan_log', 'auto_thumbnail', 'dust_method', 'grain',
-  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan'];
+  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan', 'auto_crop'];
 keys.forEach(k => { const e = $('s-' + k); e.addEventListener('change', () => api('/api/settings', {[k]: e.type === 'checkbox' ? e.checked : e.value})); });
 
 // ---------------------------------------------------------------- film profiles: the colour of a film, measured from a roll
@@ -191,6 +191,10 @@ $('imgw').addEventListener('dblclick', () => { if (!cropping && !picking) openZo
 
 function setCropping(on) { cropping = on; drag = null; if (on) setPicking(false); document.body.classList.toggle('cropping', on); $('b-crop').setAttribute('aria-pressed', String(on)); }
 $('b-crop').onclick = () => { setCropping(!cropping); render(true); };
+$('b-autocrop').onclick = async () => {
+  if (cur === null) return;
+  await api('/api/autocrop', {frame: cur});   // what it found, or that it found nothing, goes to the Activity list
+};
 $('b-cropclear').onclick = async () => { if (cur !== null) { await api('/api/crop', {frame: cur, rect: null}); setCropping(false); } };
 function at(ev) { const r = $('big').getBoundingClientRect(), f = v => Math.min(1, Math.max(0, v)); return [f((ev.clientX - r.left) / r.width), f((ev.clientY - r.top) / r.height)]; }
 function dragRect() {
@@ -217,13 +221,16 @@ function cropOnScreen(t) {
   const k = t.turns || 0, a = toScreen([t.crop[0], t.crop[1]], k), b = toScreen([t.crop[2], t.crop[3]], k);
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
 }
+// the box on screen: the crop, or while Crop is pressed on a frame without one, the whole frame, ready to drag in
+function boxOnScreen(t) { return cropOnScreen(t) || (cropping && t.src ? [0, 0, 1, 1] : null); }
 function placeCrop(r) { const box = $('cropbox'); box.hidden = !r; if (r) Object.assign(box.style, {left: r[0] * 100 + '%', top: r[1] * 100 + '%', width: (r[2] - r[0]) * 100 + '%', height: (r[3] - r[1]) * 100 + '%'}); }
 const iw = $('imgw');
 iw.addEventListener('pointerdown', ev => {
   if (cur === null) return;
   if (picking) { setPicking(false); api('/api/settings', {focus_point: toScanner(at(ev), tile(cur).turns || 0)}); return; }
-  const box = $('cropbox'), held = ev.target.dataset && ev.target.dataset.h, shown = cropOnScreen(tile(cur));
-  if (shown && (held || ev.target === box)) {   // a side or corner of the crop, or its middle: change the crop that is there
+  const box = $('cropbox'), held = ev.target.dataset && ev.target.dataset.h, shown = boxOnScreen(tile(cur));
+  const placeholder = !tile(cur).crop;   // the whole-frame box Crop shows before there is a crop: its middle draws a new one
+  if (shown && (held || (ev.target === box && !placeholder))) {   // a side or corner of the crop, or its middle: change the crop that is there
     ev.preventDefault(); iw.setPointerCapture(ev.pointerId);
     drag = {edit: held || 'move', r: shown, a: at(ev), b: at(ev)};
     document.body.classList.add('cropdrag'); return;
@@ -326,20 +333,20 @@ function drawViewer(busy) {
     if (pic !== shownPic) { $('big').src = pic; shownPic = pic; }
     $('big').alt = 'Frame ' + (cur + 1) + ', ' + SOURCE[t.src].toLowerCase();
   } else shownPic = '';
-  if (!drag) placeCrop(has ? cropOnScreen(t) : null);
+  if (!drag) placeCrop(has ? boxOnScreen(t) : null);
   const fp = S.settings.focus_point, mark = $('fmark'); mark.hidden = !(has && fp);
   if (has && fp) { const q = toScreen(fp, t.turns || 0); mark.style.left = q[0] * 100 + '%'; mark.style.top = q[1] * 100 + '%'; }
   $('b-cropclear').hidden = !t.crop;
-  for (const id of ['b-crop', 'b-zoom']) $(id).disabled = !has;
+  for (const id of ['b-crop', 'b-zoom', 'b-autocrop']) $(id).disabled = !has;
   $('b-sharper').disabled = busy || cur === null; $('b-rl').disabled = $('b-rr').disabled = busy || !S.frames.length;
   const sv = $('vsaved'), saved = t.saved || [];
   sv.hidden = !saved.length && !cropping && !t.crop;
-  sv.textContent = cropping ? 'Drag on the picture to mark the part to save. The crop is used when this frame is scanned.'
-      + (t.crop ? ' Drag a side or corner of the box to change it, or its middle to move it.' : '')
+  sv.textContent = cropping ? 'Drag a side or corner of the box to choose the part to save, or its middle to move it. The crop is used when this frame is scanned.'
     : [saved.length ? 'Saved from this frame: ' + saved.map(s => s.files.join(', ') + ' (' + clock(s.took) + ')').join(' · ') : '',
        t.crop ? (S.settings.archive ? 'Cropped: only the marked part is saved in Positive (Archive mode scans the whole frame, and its RAW file keeps it).'
                  : S.settings.crop_scan ? 'Cropped: only the marked part is scanned and saved, which is quicker.'
-                 : 'Cropped: only the marked part is saved (the whole frame is scanned).') + ' Drag its sides or corners to change it.' : ''].filter(Boolean).join(' ');
+                 : 'Cropped: only the marked part is saved (the whole frame is scanned).')
+         + (t.crop_auto ? ' The crop was found automatically.' : '') + ' Drag its sides or corners to change it.' : ''].filter(Boolean).join(' ');
 }
 
 function drawStrip() {

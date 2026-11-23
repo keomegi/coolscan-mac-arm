@@ -1,0 +1,5 @@
+# What the tests need as well (python -m pip install -r requirements-dev.txt)
+# nkscan is not needed for the tests: they use the app's pretend scanner (--demo).
+numpy
+tifffile
+pytest

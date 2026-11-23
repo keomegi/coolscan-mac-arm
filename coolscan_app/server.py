@@ -162,6 +162,8 @@ def make_handler(app):
                     body.get("number"), bool(body.get("move_aside")))))
             if path == "/api/crop":
                 return self._send(app.set_crop(int(body.get("frame", -1)), body.get("rect")))
+            if path == "/api/autocrop":
+                return self._send(app.auto_crop(int(body.get("frame", -1))))
             if app.testing and path in ("/api/preset", "/api/film_profile", "/api/unlock"):
                 return self._send({"ok": False, "busy": True,
                                    "error": "A test queue is running. This can be changed when it is done."})
@@ -189,7 +191,7 @@ def make_handler(app):
                 return self._send(app.quick_job("changing roll", lambda: app.switch_roll(body.get("name"))))
             if path == "/api/notifytest":
                 if app_module.notifier is None:
-                    app.say("messages are not installed: notify.py is not in the coolscan_app folder")
+                    app.say("messages are not installed: notify.py is not in the coolscan_app/extras folder")
                 elif not app.notify("Test message. This is how you will hear that a strip is done."):
                     app.say("nothing to send to yet: tick the banner, name a shortcut or give an ntfy topic")
                 return self._send({"ok": True})
@@ -216,6 +218,8 @@ def make_handler(app):
                 if "focus_point" in body:
                     app.focus_lock = None  # like Nikon Scan: a new focus point means focus again
                     app.frame_focus = {}
+                if "auto_crop" in body and not app.job:
+                    app.auto_crop_setting_changed()
                 if ("rotate180" in body or "invert_preview" in body or "tone" in body or "restore" in body
                         or "film" in body) and not app.job:
                     app.redraw()
@@ -244,7 +248,7 @@ def main():
             sys.exit("nkscan is missing. Turn the environment on (source .venv/bin/activate), "
                      "or install it with:  pip install nkscan numpy")
     if args.test and not test_mode_installed():
-        print("Test mode is not installed here (it needs coolscan_app/testmode.py, web/test.html and web/test.js). "
+        print("Test mode is not installed here (it needs coolscan_app/extras/testmode.py, web/test.html and web/test.js). "
               "Starting the ordinary screen.")
         args.test = False
     app = App(demo=args.demo)

@@ -12,21 +12,22 @@ from pathlib import Path
 
 import numpy as np
 
-from .colour import FILM_PROFILE_LEAST, display_image, shrink
-from .demo import _Demo
-from .develop import DevelopMixin
-from .driver import Cancelled, DriverLog, _lost_scanner, _stopped, clock, explain
-from .imaging import encode_png
+from .imaging.autocrop import find_picture
+from .imaging.colour import FILM_PROFILE_LEAST, display_image, shrink
+from .scanner.demo import _Demo
+from .imaging.develop import DevelopMixin
+from .scanner.driver import Cancelled, DriverLog, _lost_scanner, _stopped, clock, explain
+from .imaging.files import encode_png
 from .keepawake import KeepAwake
 try:  # notify.py is optional: it is kept out of git, and the app runs without it
-    from . import notify as notifier
+    from .extras import notify as notifier
 except ImportError:
     notifier = None
 from .rolls import RollsMixin
-from .scanning import ICE_HELPER, ScanMixin
+from .scanner.scanning import ICE_HELPER, ScanMixin
 from .settings import SettingsMixin, default_settings
 try:  # test mode is optional too: testmode.py and web/test.html, test.js are kept out of git
-    from .testmode import TestMixin
+    from .extras.testmode import TestMixin
     HAVE_TESTMODE = True
 except ImportError:
     HAVE_TESTMODE = False
@@ -78,6 +79,8 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.picture_serial = 0
         self.thumb_v = 0
         self.crops = {}             # frame index -> (x0, y0, x1, y1), fractions of the frame as the scanner sees it
+        self.crop_auto = set()      # frames whose crop was found by Auto crop (and not changed by hand since)
+        self.crop_hand = set()      # frames whose crop was set or cleared by hand: "crop each frame" leaves them alone
         self.frame_exposures = {}   # frame index -> the exposures its picture on screen was scanned with
         self.focus_lock = None      # dict(frame, position, result) from Autofocus
         self.frame_focus = {}       # frame index -> lens position, focused once per frame
@@ -140,7 +143,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             boxes = self._thumb_boxes()
         tiles = {i: {"src": self.frame_source.get(i), "v": self.picture_v.get(i, 0),
                      "info": self.preview_info.get(i, ""), "saved": self.frame_saved.get(i, []),
-                     "turns": self._turns(i), "crop": self.crops.get(i)} for i in frames}
+                     "turns": self._turns(i), "crop": self.crops.get(i), "crop_auto": i in self.crop_auto} for i in frames}
         return {
             "demo": self.demo, "connected": s is not None, "caps": caps, "job": self.job,
             "awake": self.keep_awake.awake,
@@ -490,6 +493,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
     def _forget_pictures(self):
         self.previews, self.preview_info, self.preview_raw = {}, {}, {}
         self.frame_source, self.frame_saved, self.crops = {}, {}, {}
+        self.crop_auto, self.crop_hand = set(), set()
         self.frame_exposures = {}
 
     def _new_picture(self, i):
@@ -505,6 +509,8 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.previews[i] = self._png(planes, i)
         self.frame_source[i], self.preview_info[i] = source, info
         self._new_picture(i)
+        if self.settings.get("auto_crop") and source in ("thumbnail", "preview") and i not in self.crop_hand:
+            self.auto_crop(i, quiet=True)   # each new look at a frame finds its picture again, unless the crop was set by hand
         with self.lock:
             self.version += 1
 
@@ -518,12 +524,59 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
                 tile = {k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}
                 self._show(i, tile, "thumbnail", f"from the thumbnail pass, {last - first}x{lower - upper} px")
 
+    def auto_crop(self, i, quiet=False):
+        """Auto crop: find the picture inside frame i on its picture on screen (thumbnail, preview or
+        scan) and crop to it, leaving out the film's edges, the holder and the gap between frames."""
+        d = self.discovery
+        if d is None or not 0 <= i < len(d.frames):
+            return {"ok": False}
+        planes = self.preview_raw.get(i) or {}
+        colours = [p for k, p in planes.items() if k in ("red", "green", "blue", "gray", "grey")] or list(planes.values())
+        try:
+            rect = find_picture(colours)
+        except Exception:  # noqa: BLE001 - an extra: never in the way of scanning
+            traceback.print_exc()
+            rect = None
+        if rect is None:
+            if i in self.crop_auto:   # an earlier guess the better picture does not bear out
+                self.crops.pop(i, None)
+                self.crop_auto.discard(i)
+            if not quiet:
+                self.say(f"frame {i + 1}: auto crop found no border to cut; the crop is as it was")
+        else:
+            self.crops[i] = rect
+            self.crop_auto.add(i)
+            self.crop_hand.discard(i)
+            if not quiet:
+                self.say(f"frame {i + 1}: auto crop keeps {rect[2] - rect[0]:.0%} x {rect[3] - rect[1]:.0%} of the frame")
+        with self.lock:
+            self.version += 1
+        return {"ok": True, "found": rect is not None, "crop": self.crops.get(i)}
+
+    def auto_crop_setting_changed(self):
+        """"Crop each frame automatically" switched on: crop every frame not cropped by hand; off: drop those crops."""
+        d = self.discovery
+        if d is None:
+            return
+        if self.settings.get("auto_crop"):
+            for i in range(len(d.frames)):
+                if i in self.preview_raw and i not in self.crop_hand:
+                    self.auto_crop(i, quiet=True)
+        else:
+            for i in list(self.crop_auto):
+                self.crops.pop(i, None)
+            self.crop_auto = set()
+            with self.lock:
+                self.version += 1
+
     def set_crop(self, i, rect):
         """Keep (or with None, drop) the part of frame i to save. Fractions of the frame, as the scanner sees it."""
         d = self.discovery
         if d is None or not 0 <= i < len(d.frames):
             return {"ok": False}
         self.crops.pop(i, None)
+        self.crop_auto.discard(i)   # set by hand from here on: "crop each frame" leaves it alone
+        self.crop_hand.add(i)
         if rect:
             x0, y0, x1, y1 = (min(1.0, max(0.0, float(v))) for v in rect)
             x0, x1 = sorted((x0, x1))
