@@ -49,6 +49,7 @@ The older checks are plain scripts, and each still runs on its own, e.g.
 | `auto_crop_test.py` | Auto crop and the Crop box |
 | `keepawake_test.py` | keeping the Mac awake, noticing a sleep, connecting again |
 | `thumb_reuse_test.py` | reusing the strip's thumbnail pass |
+| `applog_test.py` | the app log (JSON Lines in logs/), scanner codes in plain words, deleting old logs, Clear cache |
 | `notify_optional_test.py` | the app with or without `notify.py` |
 | `check_dust.py` | the dust cleaner on a made-up negative |
 | `test_test.py`, `strip_test_test.py`, `preview_test_test.py` | test mode (kept out of git with it) |

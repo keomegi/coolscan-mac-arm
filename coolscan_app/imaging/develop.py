@@ -32,7 +32,7 @@ DEVELOP_FOLDER = "Re-developed"
 VIEWS = ("raw", "clean", "film", "final")
 VIEW_WORDS = {"raw": "As scanned", "clean": "Dust removed", "film": "Film correction only",
               "final": "Dust removed + film correction"}
-FILMS = ("negative", "positive", "kodachrome", "mono")
+FILMS = ("negative", "positive", "kodachrome", "mono", "chromo")
 PIECE = (360, 480)   # rows, columns of the piece shown at full size
 FILES_MOST = 500
 
@@ -83,6 +83,7 @@ class DevelopMixin:
             "notes": [],          # what the page should say about the file on show
             "results": None,      # what the last run saved
             "extras": False,      # also save the in-between steps
+            "untag": True,        # take the Library's re-develop tag off each file developed
         }
         self.dev_cache = {}       # the file on show, read and worked on, so switching views is quick
 
@@ -92,7 +93,7 @@ class DevelopMixin:
         return {"folder": self._short_path(d["folder"]) if d["folder"] else None, "files": d["files"],
                 "current": d["current"], "frames": d["frames"], "how": d["how"], "view": d["view"],
                 "piece": d["piece"], "stale": d["stale"], "v": d["v"], "notes": d["notes"],
-                "results": d["results"], "extras": d["extras"], "views": list(VIEWS), "view_words": VIEW_WORDS,
+                "results": d["results"], "extras": d["extras"], "untag": d.get("untag", True), "views": list(VIEWS), "view_words": VIEW_WORDS,
                 # the versions ready to show: only once they are of the file on show and up to date
                 "have": sorted(self.dev_cache.get("pictures", {}))
                 if self.dev_cache.get("name") == d["current"] and not d["stale"] else [],
@@ -103,6 +104,14 @@ class DevelopMixin:
             self.version += 1
 
     # ------------------------------------------------------------------ choosing files
+    def develop_folder_now(self, roll=None, path=None):
+        """develop_folder for the page: quick, and fine while a scan runs (it only reads file headers)."""
+        try:
+            return self.develop_folder(roll, path)
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"That did not work ({e}). Check the folder before trying again."}
+
     def develop_folder(self, roll=None, path=None):
         """Look for RAW files: in a roll of the target folder (its RAW folder), or in a folder typed in."""
         if path:
@@ -184,6 +193,8 @@ class DevelopMixin:
             how = dict(d["how"])
             for k, v in body["how"].items():
                 if k == "film" and (v in FILMS or v == ""):
+                    if v == "kodachrome" and how.get("film") != v and "clean" not in body["how"]:
+                        how["clean"] = False   # cyan dye blocks infrared like dust: see scanning.clean_planes
                     how[k] = v
                 elif k == "tone" and v in ("flat", "nikon"):
                     how[k] = v
@@ -220,6 +231,8 @@ class DevelopMixin:
                 pass
         if "extras" in body:
             d["extras"] = bool(body["extras"])
+        if "untag" in body:
+            d["untag"] = bool(body["untag"])
         if again:
             d["stale"] = True
         self._dev_bump()
@@ -315,7 +328,7 @@ class DevelopMixin:
             film_pos = self._positive(planes, icc, exposures, hw)
             final_pos = film_pos if clean is planes else self._positive(clean, icc, exposures, hw)
             space = hw["colour_space"] if hw["colour_space"] in COLOUR_SPACES else (
-                "sRGB IEC61966-2.1" if film in ("negative", "mono") else "scanner")
+                "sRGB IEC61966-2.1" if film in ("negative", "mono", "chromo") else "scanner")
             pics["film"] = ("positive", film_pos[0])
             pics["final"] = ("positive", final_pos[0])
             # one stretch for both views as scanned, so that only what the dust removal did differs; the
@@ -400,11 +413,12 @@ class DevelopMixin:
         how = self.dev["how"]
         space = how["colour_space"] if how["colour_space"] in COLOUR_SPACES else "scanner RGB"
         parts = [f"developed as {film}", space]
-        if film in ("negative", "mono"):
+        if film in ("negative", "mono", "chromo"):
             parts.append("Nikon Scan tone" if how["tone"] == "nikon" else "flat tone")
         if film == "negative":
             parts.append(f'film profile "{how["film_profile"]}"' if how["film_profile"] else "colour of each frame on its own")
-        parts.append(("dust removal by the Nikon ICE helper" if how["dust_method"] == "ice" and self.ice_ready
+        parts.append("no dust removal (not possible on B&W film)" if film == "mono" else
+                     ("dust removal by the Nikon ICE helper" if how["dust_method"] == "ice" and self.ice_ready
                       else "built-in dust removal") if how["clean"] else "no dust removal")
         if how["restore"]:
             parts.append(f"colour restoration {how['restore']}")
@@ -435,7 +449,7 @@ class DevelopMixin:
         log(f"From: {d['folder']}")
         log(f"Files: {len(wanted)}" + (" (with the in-between steps as well)" if extras else ""))
         started = time.time()
-        saved, failed = [], []
+        saved, failed, done = [], [], []
         d["results"] = {"folder": self._short_path(out), "saved": saved, "failed": failed, "running": True}
         self._dev_bump()
         try:
@@ -447,6 +461,7 @@ class DevelopMixin:
                 try:
                     files = self._dev_one(entry, out, extras, log)
                     saved.extend(files)
+                    done.append(name)
                 except Cancelled:
                     raise
                 except Exception as e:  # noqa: BLE001 - one bad file must not stop the rest
@@ -463,6 +478,14 @@ class DevelopMixin:
             log(f"Done: {len(wanted) - len(failed)} of {len(wanted)} file(s) in {clock(took)}")
             d["results"]["running"] = False
             d["results"]["took"] = clock(took)
+            if d.get("untag", True) and done and hasattr(self, "library_untag_redo"):
+                try:
+                    n = self.library_untag_redo(self._dev_roll_folder(), [x.rsplit(".", 1)[0] for x in done])
+                    if n:
+                        d["results"]["untagged"] = n
+                        self.say(f"re-develop: took the re-develop tag off {n} picture(s) in the Library")
+                except (OSError, ValueError) as e:
+                    self.say(f"re-develop: could not take the Library's re-develop tags off ({e})")
             self._dev_bump()
         self.say(f"re-develop finished: {len(wanted) - len(failed)} of {len(wanted)} file(s) saved in "
                  f"{self._short_path(out)}, in {clock(took)}")

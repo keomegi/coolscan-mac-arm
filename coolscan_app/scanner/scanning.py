@@ -42,7 +42,7 @@ class ScanMixin:
         film = self._film_text()
         if film:
             meta["description"] = f"Film: {film}. " + meta["description"]
-        if self.settings["roll"]:
+        if self.settings["roll"] and self.settings["use_roll"]:
             meta["description"] += f". Roll: {self.settings['roll']}"
         iso = re.sub(r"\D", "", str(self.settings["film_iso"]))
         if iso:
@@ -105,7 +105,7 @@ class ScanMixin:
         if restore or grain:
             self.say(" and ".join(n for n, on in (("colour restoration", restore), ("grain reduction", grain)) if on)
                      + " on this frame")
-        if how["film"] in ("negative", "mono"):
+        if how["film"] in ("negative", "mono", "chromo"):
             pos = invert_negative(planes, how["tone"], how["profile"], exposures)
             pos = reduce_grain(restore_colour(pos, restore), grain, self._progress)
             pos = [(v * 65535 + 0.5).astype(np.uint16) for v in pos]
@@ -139,10 +139,10 @@ class ScanMixin:
         for f in folders:
             f.mkdir(parents=True, exist_ok=True)
         self._write_description()
-        clean = bool(st["clean"])
+        clean = bool(st["clean"]) and self._film() != "mono"  # silver blocks infrared: no dust removal on B&W
         job = dict(archive=archive, clean=clean, infrared=archive or bool(st["ir"] or clean),
                    raw_dir=raw_dir, pos_dir=pos_dir, outdir=outdir)
-        icc = s.nikon_profile(self._film())
+        icc = s.nikon_profile(self._driver_film())
         job["icc"] = bytes(icc) if icc else None
         if clean and st["dust_method"] == "ice" and not self.check_ice():
             self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using the built-in dust removal")
@@ -150,10 +150,14 @@ class ScanMixin:
         name_folders = self._name_folders()
         self.batch_day = time.strftime("%Y%m%d")
         n = self.next_number()
+        if st["overwrite"] and int(st["start"] or 0) > 0:
+            over = self.would_overwrite(len(indices))
+            if over:
+                self.say("overwriting " + ", ".join(over))
         done, failed, ending = 0, [], "completed"
         strip_started = time.time()
         self.timing = {"strip_started": strip_started, "of": len(indices), "done": 0}
-        roll = st["roll"] or outdir.name
+        roll = (st["roll"] if st["use_roll"] else "") or outdir.name
         roll_plain = (re.match(r"Roll \d+", roll) or [roll])[0]
         try:
             for i in indices:
@@ -167,7 +171,7 @@ class ScanMixin:
                 self.frame_times = {}
                 self.timing.update(frame=i + 1, frame_started=frame_started)
                 try:
-                    self._scan_one(s, d, i, n, stem, job, saved)
+                    self._scan_one_as_set(s, d, i, n, stem, job, saved)   # with the frame's own settings, if it has any
                 except Exception as e:  # noqa: BLE001
                     if saved:
                         log("Saved as " + ", ".join(saved))
@@ -266,7 +270,7 @@ class ScanMixin:
         c = self.caps
         firmware = str(getattr(c, "revision", "") or "").strip()
         space = st["colour_space"] if st["colour_space"] in COLOUR_SPACES else "scanner RGB (Nikon profile)"
-        film_names = {"negative": "colour negative", "positive": "slide", "kodachrome": "Kodachrome", "mono": "B&W negative"}
+        film_names = {"negative": "colour negative", "positive": "slide", "kodachrome": "Kodachrome", "mono": "B&W negative", "chromo": "B&W chromogenic (C-41)"}
         add(f"Coolscan scan log, {time.strftime('%Y-%m-%d %H:%M:%S')}")
         add(f"Scanner: {getattr(c, 'product', 'unknown')}" + (f", firmware {firmware}" if firmware else ""))
         add(f"Folder: {folder}")
@@ -402,7 +406,7 @@ class ScanMixin:
             self._measure_colour(stem, whole, r)
             planes = self._cropped(i, turned(planes))
         note = "" if r.complete else " (warning: the pass came back short)"
-        negative = self._film() in ("negative", "mono")
+        negative = self._film() in ("negative", "mono", "chromo")
         if negative and st["negatives"] in ("negative", "both"):
             raw_name = f"{stem}.tif" if st["negatives"] == "negative" else f"{stem}_negative.tif"
             write_tiff(outdir / raw_name, planes, r.dpi, icc,  # with Nikon's profile
@@ -600,6 +604,11 @@ class ScanMixin:
         """
         film = film or self._film()
         who = who or f"frame {i + 1}"
+        if film == "mono":
+            # silver blocks infrared just like dust does, so the cleaner would take the densest parts of
+            # a B&W negative (faces, skies) for dirt and paint over them. Never run it on B&W film.
+            self.say(f"{who}: no dust removal on B&W film (silver blocks the infrared); left as scanned")
+            return planes
         if ir is None or len(planes) != 3:
             self.say(f"{who}: dust removal needs red, green, blue and infrared; left as scanned")
             return planes
@@ -611,7 +620,7 @@ class ScanMixin:
                 self.say(f"{who}: the Nikon ICE helper failed ({reason}); using the built-in dust removal")
         started = time.time()
         try:
-            result = dust_clean(planes, ir, dpi, negative=film in ("negative", "mono"),
+            result = dust_clean(planes, ir, dpi, negative=film in ("negative", "mono", "chromo"),
                                 progress=self._progress)
         except Cancelled:
             raise

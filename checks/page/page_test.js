@@ -6,12 +6,17 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const p = await ctx.newPage();
+  // the Scan quality and Save as boxes start folded since 2026-11-23: open them, as they were when this script was written
+  await p.addInitScript(() => { try { if (!localStorage.getItem('coolscan.cards')) localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-save': true})); } catch (e) {} });
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
   p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   const url = 'http://127.0.0.1:' + port + '/';
   await p.goto(url);
   await p.waitForFunction(() => document.querySelectorAll('.tile img').length === 6, null, { timeout: 30000 });
+  // written when Archive mode started off (it starts on since 2026-11-24): switch it off first
+  await p.evaluate(() => fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archive: false }) }));
+  await p.waitForFunction(() => !document.getElementById('s-archive').checked, null, { timeout: 10000 });
   const out = {};
   const logHas = t => p.waitForFunction(x => document.getElementById('log').textContent.includes(x), t, { timeout: 120000 });
   const post = (path, body) => p.evaluate(([path, body]) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(r => r.json()), [path, body]);
@@ -42,6 +47,7 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   // 5 crop on frame 3
   await p.click('.tile[data-i="2"] .pic');
   await p.click('#b-crop'); out.cropHint = await txt('vsaved');
+  await p.$eval('#stage', e => e.scrollIntoView({ block: 'center' })); await p.waitForTimeout(200);   // the frame cards can push it below the window
   const box = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   await p.mouse.move(box.x + box.w * 0.2, box.y + box.h * 0.2); await p.mouse.down(); await p.mouse.move(box.x + box.w * 0.5, box.y + box.h * 0.5, { steps: 4 });
   await p.mouse.move(box.x + box.w * 0.8, box.y + box.h * 0.7, { steps: 4 }); await p.mouse.up();
@@ -78,7 +84,7 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   out.presetEmpty = await p.$eval('#preset', e => e.options[e.selectedIndex].textContent);
   await p.click('#b-presetnew'); await p.fill('#presetname', 'Quick look'); await p.click('#b-presetsave');
   await p.waitForFunction(() => document.getElementById('preset').value === 'Quick look');
-  await p.selectOption('#s-dpi', '2900'); await p.check('#s-archive');
+  await p.selectOption('#s-dpi', '2900'); await p.check('#s-archive', { force: true });
   await p.waitForFunction(() => document.getElementById('preset').value === '');
   out.presetChanged = await p.$eval('#preset', e => e.options[e.selectedIndex].textContent);
   await p.click('#b-presetnew'); out.presetPrefill = await p.inputValue('#presetname'); await p.fill('#presetname', 'Archive 2900'); await p.keyboard.press('Enter');
@@ -111,7 +117,9 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   await post('/api/load');
   await p.waitForFunction(() => document.querySelectorAll('.tile img').length === 4, null, { timeout: 30000 });
   out.strip2 = { cols: await p.$eval('#tiles', e => getComputedStyle(e).getPropertyValue('--cols').trim()), scan: await txt('b-scan'), ticked: await p.$$eval('.tile.ticked', e => e.length), view: await view() };
-  await p.click('#stripbox > summary'); out.boxes = await p.$$eval('.box', e => e.length); await p.click('.box >> nth=2'); out.boxLook = await txt('vtitle');
+  // the frames are one row in the order the strip lies (sorted by where the thumbnail pass found them)
+  out.order = await p.$$eval('.tile', t => t.map(e => +e.dataset.i + 1)); out.rows2 = await p.$$eval('.tile', t => new Set(t.map(e => e.offsetTop)).size);
+  await p.click('.tile >> nth=2'); out.boxLook = await txt('vtitle');
   out.files = fs.readdirSync(base + '/Roll 001').sort();
   out.errs = errs; console.log(JSON.stringify(out, null, 1));
   // dark mode, for a look at the contrast

@@ -57,3 +57,10 @@ app_scan.iso
 # Optional module, kept local only (never commit)
 coolscan_app/extras/notify.py
 coolscan_app/notify.py
+
+# The driver log and the app's lines (logs/driver.log, logs/driver.prev.log)
+logs/
+
+# Backups made before edits, and one-off scripts (kept local)
+previous/
+redevelop_*.py

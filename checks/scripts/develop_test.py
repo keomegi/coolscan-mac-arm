@@ -198,22 +198,56 @@ check("state has a develop part", "develop" in json.loads(get("/api/state").read
 check("folder", post("/api/develop/folder", {"roll": "Roll 001"})["ok"])
 check("look starts a job", post("/api/develop/look", {})["ok"])
 for _ in range(200):
-    if not app2.job and not app2.dev["stale"]:
+    if not app2.dev_job and not app2.dev["stale"]:
         break
     time.sleep(0.05)
 check("pictures served", get("/develop/view/final.png").status == 200 and get("/develop/piece/raw.png").status == 200)
 check("set", post("/api/develop/set", {"view": "clean", "piece": [0.3, 0.3]})["ok"] and app2.dev["view"] == "clean")
 check("run", post("/api/develop/run", {"names": []})["ok"])
 for _ in range(400):
-    if not app2.job:
+    if not app2.dev_job:
         break
     time.sleep(0.05)
 check("the run saved its file", app2.dev["results"] and len(app2.dev["results"]["saved"]) == 1, str(app2.dev["results"]))
 app2.job = "scan"
-check("a run is refused while a scan is going", not post("/api/develop/run", {})["ok"])
-check("changing the look is fine while a scan is going (nothing heavy)", post("/api/develop/set", {"view": "raw"})["ok"])
+before = app2.progress
+check("changing the look is fine while a scan is going", post("/api/develop/set", {"view": "raw"})["ok"])
+check("a folder can be opened while a scan is going", post("/api/develop/folder", {"roll": "Roll 001"})["ok"])
+check("a run is allowed while a scan is going", post("/api/develop/run", {"names": []})["ok"])
+check("a second run is refused while the first is going", not post("/api/develop/run", {"names": []})["ok"])
+for _ in range(400):
+    if not app2.dev_job:
+        break
+    time.sleep(0.05)
+check("the run beside the scan saved its file", len(app2.dev["results"]["saved"]) == 1, str(app2.dev["results"]))
+check("the scan's job was left alone", app2.job == "scan" and app2.progress == before and not app2.cancel)
 app2.job = None
 server.shutdown()
+
+print("   re-develop beside a running job: each has its own Stop, progress and frame times")
+seen = {}
+def pretend_scan():
+    app2.frame_times = {"scan": 1.0}
+    for k in range(200):
+        if app2.cancel:
+            break
+        app2._progress("scan", 0, k, 200)
+        time.sleep(0.02)
+    seen["times"] = dict(app2.frame_times)
+app2.dev["stale"] = True
+check("a job starts", app2.run_job("scan", pretend_scan))
+check("re-develop starts beside it", app2.run_dev_job("re-develop", lambda: app2.develop_run([])))
+time.sleep(0.3)
+check("the scan's progress is the scan's", (app2.progress or {}).get("phase") == "scan", str(app2.progress))
+app2.cancel = True  # the main page's Stop
+for _ in range(400):
+    if not app2.job and not app2.dev_job:
+        break
+    time.sleep(0.05)
+check("Stop on the main page stopped the scan only", "stopped" not in " ".join(l for l in app2.log[-20:] if "re-develop" in l)
+      and len(app2.dev["results"]["saved"]) == 1, str(app2.dev["results"]))
+check("re-develop did not add to the scan's frame times", seen.get("times") == {"scan": 1.0}, str(seen))
+app2.cancel = False
 
 if len(sys.argv) > 1:
     print("I a real RAW file")

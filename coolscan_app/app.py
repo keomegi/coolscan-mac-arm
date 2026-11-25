@@ -13,9 +13,13 @@ from pathlib import Path
 import numpy as np
 
 from .imaging.autocrop import find_picture
+from .scanner.strip import NUDGE, NUDGE_MOST, Strip, fit_frames
 from .imaging.colour import FILM_PROFILE_LEAST, display_image, shrink
 from .scanner.demo import _Demo
 from .imaging.develop import DevelopMixin
+from .library import LibraryMixin
+from .croplearning import CropLearningMixin
+from .applog import AppLog
 from .scanner.driver import Cancelled, DriverLog, _lost_scanner, _stopped, clock, explain
 from .imaging.files import encode_png
 from .keepawake import KeepAwake
@@ -23,6 +27,7 @@ try:  # notify.py is optional: it is kept out of git, and the app runs without i
     from .extras import notify as notifier
 except ImportError:
     notifier = None
+from .framesettings import FrameSettingsMixin
 from .rolls import RollsMixin
 from .scanner.scanning import ICE_HELPER, ScanMixin
 from .settings import SettingsMixin, default_settings
@@ -36,13 +41,49 @@ except ImportError:
         pass
 
 WATCH_SECONDS = 2  # how often the idle scanner is asked whether film is in
+STALL_SECONDS = 30  # nothing from the scanner this long in the middle of a pass: it is probably stuck
 # The frames and thumbnail of the strip in the scanner, kept so that starting the app
 # again (or reconnecting) with the same film still in needs no new thumbnail pass.
 # nkscan checks it is the same scanner, holder, film type and strip before using it.
 STRIP_CACHE = Path.home() / ".coolscan-strip.cache"
+STRIP_SAMPLES = Path.home() / ".coolscan-strips"   # the last few thumbnail passes, raw, to tune frame finding on
+STRIP_SAMPLES_KEPT = 12
 
 
-class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
+def _keep_thumbnail(d):
+    """Keep this thumbnail pass as it came from the driver (planes, frames, addresses) in a small file,
+    the last STRIP_SAMPLES_KEPT of them, so frame finding can be checked on real strips later."""
+    try:
+        if d.thumbnail is None:
+            return
+        STRIP_SAMPLES.mkdir(exist_ok=True)
+        arrays = {f"plane_{k}": np.asarray(v) for k, v in d.thumbnail.items()}
+        np.savez_compressed(STRIP_SAMPLES / time.strftime("strip-%Y%m%d-%H%M%S.npz"),
+                            frames=np.asarray(d.found, np.int64),
+                            column_addresses=np.asarray(list(d.column_addresses or []), np.int64),
+                            row_addresses=np.asarray(list(getattr(d, "row_addresses", None) or []), np.int64),
+                            **arrays)
+        for old in sorted(STRIP_SAMPLES.glob("strip-*.npz"))[:-STRIP_SAMPLES_KEPT]:
+            old.unlink()
+    except Exception:  # noqa: BLE001 - only a sample for later; never in the way of scanning
+        traceback.print_exc()
+
+
+def _background_priority():
+    """macOS: run this thread at "utility" quality of service (the efficiency cores on Apple silicon),
+    so re-developing beside a scan does not keep the scanner waiting. Elsewhere: nothing."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        lib = ctypes.CDLL("/usr/lib/libSystem.dylib")
+        lib.pthread_set_qos_class_self_np(ctypes.c_uint(0x11), ctypes.c_int(0))  # QOS_CLASS_UTILITY
+    except Exception:  # noqa: BLE001 - only a nicety
+        pass
+
+
+class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin, LibraryMixin,
+          CropLearningMixin):
     def __init__(self, demo=False):
         self.demo = demo
         self.test_mode = False       # started with --test: the test page is served as well
@@ -57,6 +98,12 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.test_frame = None       # while testing: the frame being tested
         self.test = {"results": [], "folder": None, "frame": None, "frames": [], "crop": (0.5, 0.5), "running": None,
                      "totals": [], "strip_profile": None}
+        # Re-develop runs in a lane of its own, beside a scan: its own job name, progress, Stop and
+        # frame times. Code that runs on the re-develop thread sees those through the properties below.
+        self._lane = threading.local()
+        self._main = {"cancel": False, "progress": None, "frame_times": {}}
+        self._dev_lane = {"cancel": False, "progress": None, "frame_times": {}}
+        self.dev_job = None
         self.lock = threading.Lock()
         # One thread at a time talks to the scanner. A job holds this for its whole
         # length; the film watcher only looks when nobody holds it.
@@ -91,8 +138,11 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.reconnect_tries = 0               # after the Mac slept and the scanner dropped: tries left
         self.job = None
         self.progress = None
-        self.cancel = False
+        self.progress_at = None   # when the driver last reported a piece of a pass
+        self.stall_said = False   # the "scanner has gone quiet" line was said for this job
         self.driver_log = DriverLog()
+        self.applog = AppLog()   # logs/app-<day>.jsonl: everything that happens (applog.py)
+        self._log_summary = (0, None)
         self.frame_times = {}  # seconds spent on the frame being scanned: scan, clean, waited (see _driver_scan)
         self.timing = {}       # for the screen: when the strip and the frame started, how long the last ones took
         self.strip_id = 0      # goes up whenever the frames on screen are from another strip
@@ -101,11 +151,70 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.version = 0
         self.settings = default_settings()
         self._dev_reset()           # re-develop: RAW files made into finished pictures again (develop.py)
+        self._lib_reset()           # library: the scans already made, to look through (library.py)
+        self._croplearn_reset()     # the learning auto crop: crops drawn by hand, learned from (croplearning.py)
+
+    # -- lanes: the scanner's jobs, and re-develop beside them
+    def _in_dev(self):
+        return getattr(self._lane, "dev", False)
+
+    def _lane_value(name):  # noqa: N805 - a property maker, used only in the class body
+        def get(self):
+            return (self._dev_lane if self._in_dev() else self._main)[name]
+
+        def put(self, value):
+            (self._dev_lane if self._in_dev() else self._main)[name] = value
+        return property(get, put)
+
+    cancel = _lane_value("cancel")
+    progress = _lane_value("progress")
+    frame_times = _lane_value("frame_times")
+    del _lane_value
+
+    @property
+    def dev_progress(self):
+        return self._dev_lane["progress"]
+
+    def stop_develop(self):
+        self._dev_lane["cancel"] = True
+
+    def run_dev_job(self, name, fn, *args):
+        """Re-develop work, beside whatever the scanner is doing: it never touches the scanner, so it does
+        not wait for a scan. On a Mac it asks for the efficiency cores, to leave the rest to the scan."""
+        with self.lock:
+            if self.dev_job:
+                return False
+            self.dev_job = name
+            self._dev_lane.update(cancel=False, progress=None)
+            self.version += 1
+        self.keep_awake.hold()
+
+        def work():
+            self._lane.dev = True
+            _background_priority()
+            try:
+                fn(*args)
+            except Exception as e:  # noqa: BLE001 - show every failure in the log
+                if _stopped(e):
+                    self.say(f"{name}: stopped")
+                    return
+                self.say(f"{name} failed. {explain(e)}")
+                traceback.print_exc()
+            finally:
+                with self.lock:
+                    self.dev_job = None
+                    self._dev_lane["progress"] = None
+                    self.version += 1
+                self.keep_awake.release()
+        threading.Thread(target=work, daemon=True).start()
+        return True
 
     # -- bookkeeping
     def say(self, msg):
         line = time.strftime("%H:%M:%S ") + msg
         print(line, flush=True)
+        self.driver_log.note(line)
+        self.applog.say(msg)
         with self.lock:
             self.log.append(line)
             self.log = self.log[-300:]
@@ -115,7 +224,27 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         # Called by the driver between the pieces of a pass, so it has to be quick:
         # anything slow here keeps the scanner waiting. The page reads this on its own.
         self.progress = {"phase": phase, "done": done, "total": total}
+        self.progress_at = time.time()
         return not self.cancel
+
+    def _check_stall(self):
+        """Watcher thread: say so when the scanner stops sending in the middle of a pass.
+
+        nkscan only looks at Stop between the pieces of a pass, so a scanner that stops sending
+        can't be stopped from here. Switching it off ends the wait with an error."""
+        p, at = self.progress, self.progress_at
+        if not self.job or not p or at is None or self.stall_said:
+            return
+        done, total = p.get("done") or 0, p.get("total") or 0
+        if not total or done >= total:
+            return  # between passes, or working on a finished pass: not the scanner's turn
+        quiet = time.time() - at
+        if quiet < STALL_SECONDS:
+            return
+        self.stall_said = True
+        self.say(f"the scanner has sent nothing for {int(quiet)} s, at {int(100 * done / total)}% of the "
+                 f"{p.get('phase', 'pass')} pass. It seems stuck, and Stop can't reach it: switch the scanner "
+                 f"off and on. The {self.job} then ends with an error, and the next button press connects again.")
 
     def state(self):
         # Never touch the session here. This runs on a web thread, and the nkscan
@@ -143,11 +272,15 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             boxes = self._thumb_boxes()
         tiles = {i: {"src": self.frame_source.get(i), "v": self.picture_v.get(i, 0),
                      "info": self.preview_info.get(i, ""), "saved": self.frame_saved.get(i, []),
-                     "turns": self._turns(i), "crop": self.crops.get(i), "crop_auto": i in self.crop_auto} for i in frames}
+                     "turns": self._turns(i), "crop": self.crops.get(i), "crop_auto": i in self.crop_auto,
+                     "preview_skipped": getattr(self, "preview_skipped", {}).get(i),
+                     "window": self._window_state(i)} for i in frames}
         return {
             "demo": self.demo, "connected": s is not None, "caps": caps, "job": self.job,
+            "dev_job": self.dev_job, "dev_progress": self.dev_progress,
             "awake": self.keep_awake.awake,
-            "progress": self.progress, "log": self.log[-60:], "settings": self.settings,
+            "progress": self.progress, "log": self.log[-60:], "settings": self.shared_settings(),
+            "frame_settings": self.frame_settings_state(),
             "frames": frames, "tiles": tiles, "thumb": self.thumb_png is not None, "thumb_v": self.thumb_v,
             "boxes": boxes, "presets": sorted(self.settings["presets"]), "preset": self.current_preset(),
             "film_profiles": self.film_profiles(), "roll_measured": len(self._roll_colour()),
@@ -156,10 +289,12 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             "turns": {i: self._turns(i) for i in frames}, "preview_info": self.preview_info,
             "focus_lock": self.focus_lock,
             "exposure_lock": self.exposure_lock, "version": self.version,
-            "roll_path": self._short_path(self._base() / self.settings["roll"]) if self.settings["roll"] else None,
+            "roll_path": (self._short_path(self._base() / self.settings["roll"]) if self.settings["use_roll"]
+                          else self._short_path(self._base())) if self.settings["roll"] or not self.settings["use_roll"] else None,
             "film_text": self._film_text(), "roll_number": self._roll_number(self.settings["roll"] or ""),
             "sample_name": self._stem(None, number) + ".tif", "next_number": number,
             "film_in": self.film_in if self.settings["auto_thumbnail"] else None,
+            "logs": self.log_summary(),
             "ice_helper": self.ice_ready, "strip": self.strip_id, "notify": notifier is not None,
             "rolls": self.rolls(), "timing": dict(self.timing, now=time.time()),
             "test": self.test_state() if self.test_mode else None,
@@ -179,11 +314,13 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             if self.job:
                 return False
             self.job, self.cancel, self.progress = name, False, None
+            self.progress_at, self.stall_said = None, False
             self.version += 1
         self.keep_awake.hold()  # the Mac must not sleep in the middle of this
         started = time.time()
 
         def work():
+            self.applog.write("info", "job", name, state="started")
             try:
                 with self.session_lock:
                     fn(*args)
@@ -209,6 +346,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
                     self.job, self.progress = None, None
                     self.version += 1
                 self.keep_awake.release()
+                self.applog.write("info", "job", name, state="ended", seconds=round(time.time() - started, 1))
         threading.Thread(target=work, daemon=True).start()
         return True
 
@@ -241,7 +379,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
 
     def notify(self, text, plain=None, wait=False):
         """Tell the person, in every way they switched on. `plain` (no film notes) is what leaves the Mac for ntfy."""
-        if notifier is None:
+        if notifier is None or not self.settings.get("notify_on"):
             return False
         send_banner, send_shortcut, send_ntfy = notifier.send_banner, notifier.send_shortcut, notifier.send_ntfy
         st = self.settings
@@ -281,6 +419,8 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
                 if time.time() - self.ice_checked > 60:
                     self.ice_checked = time.time()
                     threading.Thread(target=self.check_ice, daemon=True).start()
+                self._check_stall()
+                self.applog.daily()
                 self._after_sleep()
                 self._watch_once()
             except Exception:  # noqa: BLE001 - the watcher must never die
@@ -386,6 +526,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             self.say(f"found {devices[0]!r}")
             self.session = nkscan.Session.open(devices[0])
         c = self.refresh_caps()
+        self.applog.write("info", "scanner", "connected", scanner=self._caps_record(c))
         firmware = str(getattr(c, "revision", "") or "").strip()
         self.say(f"connected to {c.product}{', firmware ' + firmware if firmware else ''} "
                  f"({c.optical_dpi} dpi, frames found by {c.framing}, "
@@ -449,6 +590,12 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
     def _film(self):
         return self.settings["film"]
 
+    def _driver_film(self):
+        """The film type the scanner is told. Chromogenic B&W (C-41, such as Ilford XP2) is built like
+        colour negative film, dyes and all, so the scanner reads it as colour negative."""
+        film = self._film()
+        return "negative" if film == "chromo" else film
+
     def _turns(self, i=None):
         """Quarter turns counterclockwise for frame i (None: the thumbnail)."""
         k = 2 if self.settings["rotate180"] else 0
@@ -495,6 +642,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         self.frame_source, self.frame_saved, self.crops = {}, {}, {}
         self.crop_auto, self.crop_hand = set(), set()
         self.frame_exposures = {}
+        self.preview_skipped = {}   # frame index -> {"af": False, "ae": False}: what its preview left out
 
     def _new_picture(self, i):
         self.picture_serial += 1
@@ -533,7 +681,9 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         planes = self.preview_raw.get(i) or {}
         colours = [p for k, p in planes.items() if k in ("red", "green", "blue", "gray", "grey")] or list(planes.values())
         try:
-            rect = find_picture(colours)
+            rule = find_picture(colours)
+            learned = self.learned_crop(colours, rule, self._film(), raw=True)
+            rect = self._auto_crop_options(learned or rule, trim=learned is None)
         except Exception:  # noqa: BLE001 - an extra: never in the way of scanning
             traceback.print_exc()
             rect = None
@@ -552,6 +702,26 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         with self.lock:
             self.version += 1
         return {"ok": True, "found": rect is not None, "crop": self.crops.get(i)}
+
+    def _auto_crop_options(self, rect, trim=True):
+        """Auto crop's settings applied to what it found: "Extra trim" cuts a little further in on each
+        side it cut, and "Sides" = "ends" keeps only the two ends along the strip (left and right).
+        trim=False: a learned crop, which has the person's own margin in it already."""
+        if rect is None:
+            return None
+        x0, y0, x1, y1 = rect
+        if self.settings.get("auto_crop_sides") == "ends":
+            y0, y1 = 0.0, 1.0
+        try:
+            trim = min(0.03, max(0.0, float(self.settings.get("auto_crop_trim") or 0))) if trim else 0.0
+        except (TypeError, ValueError):
+            trim = 0.0
+        if trim:
+            x0, x1 = (x0 + trim if x0 > 0 else x0), (x1 - trim if x1 < 1 else x1)
+            y0, y1 = (y0 + trim if y0 > 0 else y0), (y1 - trim if y1 < 1 else y1)
+        if (x0, y0, x1, y1) == (0.0, 0.0, 1.0, 1.0) or x1 - x0 < 0.05 or y1 - y0 < 0.05:
+            return None
+        return tuple(round(v, 4) for v in (x0, y0, x1, y1))
 
     def auto_crop_setting_changed(self):
         """"Crop each frame automatically" switched on: crop every frame not cropped by hand; off: drop those crops."""
@@ -583,6 +753,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             y0, y1 = sorted((y0, y1))
             if x1 - x0 >= 0.05 and y1 - y0 >= 0.05:
                 self.crops[i] = (round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4))
+                self.croplearn_hand_crop(i, self.crops[i])   # kept to learn from (Additional settings)
         with self.lock:
             self.version += 1
         return {"ok": True, "crop": self.crops.get(i)}
@@ -645,7 +816,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             self.say(f"thumbnail pass: finding the frames ({self._holder_name()})")
             self.driver_log.mark()
             started = time.time()
-            d = s.discover_frames(format=self._format(), film=self._film(), progress=self._progress)
+            d = s.discover_frames(format=self._format(), film=self._driver_film(), progress=self._progress)
             took = time.time() - started
             waited = sum(p.get("starved_ms", 0) for p in self.driver_log.passes()) / 1000
             self.say(f"thumbnail pass took {clock(took)}" +
@@ -654,7 +825,10 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         else:
             self.say("same strip as before: used its frames and thumbnail from last time, no thumbnail pass "
                      "(press Thumbnail only to take a new one)")
+        d = Strip(d)
         self.discovery = d
+        _keep_thumbnail(d)
+        self._place_frames(quiet=False)
         self.strip_id += 1
         self.medium_seen = self._medium(s)
         self._forget_pictures()
@@ -680,7 +854,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         except OSError:
             return None
         try:
-            return s.resume_frames(data, format=self._format(), film=self._film())
+            return s.resume_frames(data, format=self._format(), film=self._driver_film())
         except Exception as e:  # noqa: BLE001 - fall back to a thumbnail pass
             if _lost_scanner(e):
                 raise
@@ -695,6 +869,66 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
                 self._forget_strip_cache()
         except OSError:
             pass
+
+    def _caps_record(self, c):
+        """Everything the scanner says about itself, for the app log."""
+        out = {}
+        for k in dir(c):
+            if k.startswith("_"):
+                continue
+            try:
+                v = getattr(c, k)
+            except Exception:  # noqa: BLE001
+                continue
+            if callable(v):
+                continue
+            out[k] = v if isinstance(v, (int, float, str, bool, type(None))) else repr(v)
+        return out
+
+    def log_summary(self):
+        """For the page, looked at no more than every 10 s: where the logs are and how big."""
+        at, got = self._log_summary
+        if got is None or time.time() - at > 10:
+            got = self.applog.summary()
+            self._log_summary = (time.time(), got)
+        return got
+
+    def set_log_days(self, days):
+        """The history setting changed: keep the new number, and delete what is now too old."""
+        self.applog.days = int(days or 0)
+        gone = self.applog.prune()
+        self._log_summary = (0, None)
+        if gone:
+            self.say(f"deleted {gone} log file(s) older than {self.applog.days} days")
+
+    def clear_cache(self):
+        """Forget what the app keeps to save time: the strip kept between runs (the next thumbnail is a
+        fresh pass), the re-develop view's pictures, and Python's compiled files. Logs, settings, saved
+        pictures and film profiles stay."""
+        if self.job or self.dev_job or self.testing:
+            return {"ok": False, "busy": True, "error": "Wait until the app has finished what it is doing."}
+        gone = []
+        if STRIP_CACHE.exists():
+            self._forget_strip_cache()
+            gone.append("the kept strip (the next thumbnail is a fresh pass)")
+        if getattr(self, "dev_cache", None):
+            self.dev_cache = {}
+            gone.append("the re-develop view's pictures")
+        self.test_pass_cache = None
+        package = Path(__file__).resolve().parent
+        compiled = 0
+        for d in package.rglob("__pycache__"):
+            for f in d.glob("*.pyc"):
+                try:
+                    f.unlink()
+                    compiled += 1
+                except OSError:
+                    pass
+        if compiled:
+            gone.append(f"{compiled} compiled Python file(s)")
+        self.say("cache cleared: " + (", ".join(gone) if gone else "there was nothing to clear"))
+        self.applog.write("info", "cache", "cleared", cleared=gone)
+        return {"ok": True, "cleared": gone}
 
     def _forget_strip_cache(self):
         try:
@@ -718,6 +952,72 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
         if self.discovery is None:
             self.thumbnail(fresh=False)
         return self.discovery
+
+    # -- where each frame sits on the strip: the driver's windows, fitted to the gaps, nudged by hand
+    def _place_frames(self, quiet=True):
+        """Work out the frame windows from the "fit frames to the gaps" setting and the nudges.
+        Returns the frames whose window changed."""
+        d = self.discovery
+        if not isinstance(d, Strip):
+            return []
+        before = list(d.frames)
+        fit = bool(self.settings.get("frame_fit"))
+        if fit and d.fitted is None:
+            try:
+                d.fitted, d.fit_note = fit_frames(d)
+            except Exception:  # noqa: BLE001 - an extra: the driver's frames are always there to fall back on
+                traceback.print_exc()
+                d.fitted, d.fit_note = None, "could not fit the frames to the gaps"
+            d.fitted = d.fitted or None
+        d.windows(fit)
+        if fit and not quiet and d.fit_note:
+            self.say(f"frames: {d.fit_note}")
+        return [i for i, (a, b) in enumerate(zip(before, d.frames)) if a != b]
+
+    def _frames_moved(self, changed):
+        """Frames whose window moved: their picture on screen is from the old window, so show their
+        piece of the thumbnail again (auto crop then looks at it again)."""
+        d = self.discovery
+        for i in changed:
+            self.frame_focus.pop(i, None)
+            b = self._thumb_tile_bounds(i)
+            if b is None or d.thumbnail is None:
+                continue
+            first, last, upper, lower = b
+            tile = {k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}
+            self._show(i, tile, "thumbnail", f"from the thumbnail pass, {last - first}x{lower - upper} px (window moved)")
+        with self.lock:
+            self.version += 1
+
+    def _window_state(self, i):
+        """For the page: {"shift": nudge presses (+ = later along the strip), "fitted": moved onto the
+        gaps, "moved": the nudges as % of the frame's length}."""
+        d = self.discovery
+        if not isinstance(d, Strip):
+            return {"shift": 0, "fitted": False, "moved": 0}
+        return d.state(i, bool(self.settings.get("frame_fit")))
+
+    def frame_fit_setting_changed(self):
+        self._frames_moved(self._place_frames(quiet=False))
+
+    def nudge_frame(self, i, steps=0, reset=False):
+        """Move frame i's window along the strip by hand: steps presses of 1% of its length (+ = later
+        along the strip, to the right on the thumbnail), or back to where it was placed."""
+        d = self.discovery
+        if not isinstance(d, Strip) or not 0 <= i < len(d.frames):
+            return {"ok": False}
+        most = int(round(NUDGE_MOST / NUDGE))
+        n = 0 if reset else max(-most, min(most, d.shift.get(i, 0) + int(steps)))
+        if n:
+            d.shift[i] = n
+        else:
+            d.shift.pop(i, None)
+        changed = self._place_frames()
+        self._frames_moved(changed)
+        st = d.state(i, bool(self.settings.get("frame_fit")))
+        if not reset and steps and i not in changed:
+            self.say(f"frame {i + 1} is at the end of the strip: it cannot move further that way")
+        return {"ok": True, **st}
 
     def _thumb_tile_bounds(self, i):
         """Columns and rows of frame i on the thumbnail, or None when they can't be placed."""
@@ -868,12 +1168,12 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
     def _scan_options(self, s, i, frame, infrared, rect=None):
         """film, focus, white balance and exposures for a pass over `frame` (or over `rect`, a crop
         of it scanned on its own)."""
-        opts = {"film": self._film(), "format": self._format(),
+        opts = {"film": self._driver_film(), "format": self._format(),
                 "base_density": getattr(self.discovery, "base_density", None),
                 "lock_white_balance": self._lock_wb(), "focus": self._focus_for(s, i, frame, rect)}
         if self.settings["exposure_mode"] == "same":
             lock = self.exposure_lock
-            if not lock or lock["film"] != self._film() or (infrared and not lock["infrared"]):
+            if not lock or lock["film"] != self._driver_film() or (infrared and not lock["infrared"]):
                 self.auto_expose_frame(s, frame, infrared)
                 lock = self.exposure_lock
             exp = lock["exposures"]
@@ -885,7 +1185,7 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             # a crop scanned on its own is exposed for the whole frame, as its preview was, and not
             # metered on the crop alone (which would brighten a crop of dark sky, and so on)
             self.say(f"frame {i + 1}: metering the whole frame, then scanning only the crop")
-            opts["exposures"] = dict(s.meter_frame(frame, infrared=infrared, film=self._film(), format=self._format(),
+            opts["exposures"] = dict(s.meter_frame(frame, infrared=infrared, film=self._driver_film(), format=self._format(),
                                                    base_density=getattr(self.discovery, "base_density", None),
                                                    lock_white_balance=self._lock_wb(), progress=self._progress))
         return opts
@@ -899,12 +1199,38 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
             if self.cancel:
                 raise Cancelled
             dpi = int(self.settings["preview_dpi"])
-            self.say(f"frame {i + 1}: preview scan at {dpi} dpi")
-            r = self._driver_scan(s, d.frames[i], dpi=dpi, progress=self._progress,
-                                  **self._scan_options(s, i, d.frames[i], False))
+            af, ae = bool(self.settings.get("preview_af", True)), bool(self.settings.get("preview_ae", True))
+            skipped = {}
+            if not af and self.caps.autofocus and self.settings["focus_mode"] in ("frame", "auto") and self.frame_focus.get(i) is None:
+                skipped["af"] = False        # the lens stays where it is: no focusing for this preview
+            if not ae and self.settings["exposure_mode"] != "same":
+                skipped["ae"] = False        # the exposure of the last preview, not metered for this frame
+            self.say(f"frame {i + 1}: preview scan at {dpi} dpi"
+                     + ("" if not skipped else " (" + ", ".join(w for k, w in (("af", "no autofocus"), ("ae", "exposure not metered")) if k in skipped) + ")"))
+            if "af" in skipped:
+                real, self.test_focus = getattr(self, "test_focus", None), "hold"
+                try:
+                    opts = self._scan_options(s, i, d.frames[i], False)
+                finally:
+                    self.test_focus = real
+            else:
+                opts = self._scan_options(s, i, d.frames[i], False)
+            last = getattr(self, "preview_last_exposures", None)
+            if "ae" in skipped and last:
+                opts["exposures"] = dict(last)
+            elif "ae" in skipped:
+                skipped.pop("ae")            # nothing to reuse yet: this first preview is metered, the next ones reuse it
+            r = self._driver_scan(s, d.frames[i], dpi=dpi, progress=self._progress, **opts)
+            if getattr(r, "exposures", None):
+                self.preview_last_exposures = dict(r.exposures)
             self._show(i, {k: shrink(v) for k, v in r.colors.items()}, "preview",
                        f"{r.cols}x{r.rows} px at {r.dpi} dpi, focus {r.focused} ({r.focus_position})",
                        exposures=getattr(r, "exposures", None))
+            self.preview_skipped = getattr(self, "preview_skipped", {})
+            if skipped:
+                self.preview_skipped[i] = skipped
+            else:
+                self.preview_skipped.pop(i, None)
 
     def _pick(self, index):
         d = self._ensure_discovery()
@@ -933,18 +1259,18 @@ class App(SettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin):
     def auto_expose_frame(self, s, frame, infrared, index=None):
         self.say("auto exposure: metering " + (f"frame {index + 1}" if index is not None else "this frame")
                  + (" with infrared" if infrared else ""))
-        exposures = s.meter_frame(frame, infrared=infrared, film=self._film(), format=self._format(),
+        exposures = s.meter_frame(frame, infrared=infrared, film=self._driver_film(), format=self._format(),
                                   base_density=getattr(self.discovery, "base_density", None),
                                   lock_white_balance=self._lock_wb(), progress=self._progress)
         self.exposure_lock = {"frame": index, "exposures": dict(exposures),
-                              "infrared": infrared, "film": self._film()}
+                              "infrared": infrared, "film": self._driver_film()}
         self.say(f"exposure {dict(exposures)}")
 
     def auto_expose(self, index):
         """Nikon Scan's AE: meter the frame and keep that exposure."""
         s = self.need_session()
         index, frame = self._pick(index)
-        infrared = bool(self.settings["ir"] or self.settings["clean"])
+        infrared = bool(self.settings["ir"] or (self.settings["clean"] and self._film() != "mono"))
         self.auto_expose_frame(s, frame, infrared, index)
 
     def calibrate(self, index):

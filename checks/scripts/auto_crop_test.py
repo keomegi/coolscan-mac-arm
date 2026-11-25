@@ -18,14 +18,30 @@ print("A real negatives from the LS-40 (when the project folder is at hand)")
 REAL = pathlib.Path("/mnt/project-files/ice-harness/real")
 files = [REAL / "scan_1.tiff"] + sorted((REAL / "test").rglob("RAW/Scan*.tif"))
 files = [f for f in files if f.exists()]
+# the clear gap between negatives, looked at by eye on each frame (2026-11-23): which sides have one (Scan003 also has a sliver on the right, under 1%, too thin to count on at thumbnail size)
+GAPS = {"scan_1.tiff": "LR", "sample_4pics/Scan001.tif": "LR", "sample_4pics/Scan002.tif": "R",
+        "sample_4pics/Scan003.tif": "L", "sample_4pics/Scan004.tif": "LR", "test_samples/Scan001.tif": "LR"}
+for name, gaps in (("20261123_019_R003.tif", "R"),    # a RAW scan from the user's roll 3
+                   ("20261124_041_R005.tif", "R")):   # a dark black-and-white frame (roll 5), its band no darker than the picture
+    extra = pathlib.Path("/mnt/project-files") / name
+    if extra.exists():
+        files.append(extra); GAPS[name] = gaps
 if not files:
     print("   (not here: skipped)")
 for f in files:
-    a = tifffile.imread(f)[::4, ::4, :3]
-    for label, sub in (("at 1/4 size", a), ("at thumbnail size", a[::22, ::22])):
+    a = tifffile.imread(f)[::4, ::4, :3].astype(np.float32)
+    key = f.name if f.name in GAPS else f"{f.parents[2].name}/{f.name}"
+    gaps = GAPS.get(key, "")
+    # the gap only reaches the scanner's ceiling at a final scan's exposure: thumbnails and previews are darker
+    sizes = (("at 1/4 size", a), ("at thumbnail size", a[::8, ::8]))
+    if "_R005" not in f.name:   # that one is a finished picture (its white top and bottom are not the scanner's): no lower exposure
+        sizes += (("at half the exposure", a * 0.5), ("thumbnail at a third of the exposure", a[::8, ::8] / 3))
+    for label, sub in sizes:
         r = find_picture([sub[..., c] for c in range(3)])
-        ok = r is not None and 0.02 <= r[1] <= 0.08 and 0.92 <= r[3] <= 0.98 and r[0] <= 0.08 and r[2] >= 0.92
-        check(f"{f.parent.parent.name}/{f.name} {label}: the dark film edges go, no side loses more than 8%", ok, str(r))
+        edge = 0.1 if "thumbnail" in label else 0.08   # a thumbnail is about 90 rows high here
+        ok = r is not None and 0.02 <= r[1] <= edge and 1 - edge <= r[3] <= 0.98 and r[0] <= 0.08 and r[2] >= 0.92
+        ok = ok and (r[0] > 0.004) == ("L" in gaps) and ((r[2] < 0.996) == ("R" in gaps) or key.endswith("Scan003.tif"))
+        check(f"{key} {label}: the dark film edges and the gaps ({gaps or 'none'}) go, no side loses more than 8%", ok, str(r))
 
 print("B made-up frames")
 rng = np.random.default_rng(1)
@@ -40,12 +56,53 @@ neg = picture.copy(); neg[:15] = 400; neg[-15:] = 400; neg[:, :12] = 65535; neg[
 r = find_picture([neg] * 3)
 check("a negative with dark edges and clear gaps: all four sides found", r is not None and r[0] > 12 / 450 and r[1] > 0.05
       and r[2] < 1 - 9 / 450 and r[3] < 0.95 and r[0] < 0.05 and r[2] > 0.95, str(r))
+dim = picture * 0.6; dim[:15] = 250; dim[-15:] = 250; dim[:, :12] = 34000; dim[:, -9:] = 34000   # the same at a thumbnail's exposure
+dim += rng.normal(0, 300, dim.shape)
+r = find_picture([dim] * 3)
+check("...and at a lower exposure, where the gaps are well below the scanner's ceiling", r is not None and r[0] > 12 / 450
+      and r[2] < 1 - 9 / 450 and r[0] < 0.05 and r[2] > 0.95, str(r))
 dark_pic = picture.copy(); dark_pic[:, :120] = 900   # a dark part of the picture along a side, not a border
 dark_pic[:15] = 400; dark_pic[-15:] = 400
 r = find_picture([dark_pic] * 3)
 check("a big dark part of the picture is not taken for a border (no side loses more than a fifth)",
       r is not None and r[0] <= 0.21, str(r))
+# a sliver of the next frame outside the clear gap (rolls 4-6): the gap's outer line is the strongest
+# step, the band reaching the side is not even, so the gap's inner line and all outside it must go
+sl = picture.copy(); sl[:12] = 400; sl[-12:] = 400
+sl[:, :8] = picture[:, 200:208]; sl[:, 8:20] = 65535     # a sliver of picture, then the gap (left)
+sl[:, -6:] = picture[:, 300:306]; sl[:, -18:-6] = 65535  # and on the right
+r = find_picture([sl] * 3)
+check("a sliver of the next frame outside the clear gap: the gap and the sliver go, the picture stays",
+      r is not None and 20 / 450 <= r[0] <= 20 / 450 + 0.012 and 1 - 18 / 450 - 0.012 <= r[2] <= 1 - 18 / 450, str(r))
+# the film's edges along the top and bottom as dark as the picture's shadows (not "dark"): the clear gap
+# is judged between them, so it still looks even
+fe = picture.copy(); fe[:12] = 3000; fe[-12:] = 3000; fe[:, :45] = 65535; fe[:12, :45] = 3000; fe[-12:, :45] = 3000
+fe[0:150, 60:70] = 1500   # a shadow in the picture, as dark as the film's edges
+r = find_picture([fe] * 3)
+check("a wide clear gap crossed by film edges no darker than the picture: all of the gap goes",
+      r is not None and 45 / 450 <= r[0] <= 45 / 450 + 0.012, str(r))
 check("no planes, or a tiny picture: nothing", find_picture([]) is None and find_picture([np.zeros((10, 10))]) is None)
+
+print("B2 the user's rolls 4-6, RAW (when this Mac's Pictures folder is at hand)")
+ROLLS = pathlib.Path.home() / "Pictures" / "Coolscan"
+# sides that kept the clear gap (or the gap and a sliver of the next frame) before 2026-11-24, and how far
+# in (share of the frame, measured by eye on the column levels) the gap ends there
+SIDES = {"20261123_012_R004.tif": ("R", 0.040), "20261123_001_R005.tif": ("L", 0.094),
+         "20261123_002_R005.tif": ("L", 0.033), "20261123_015_R005.tif": ("L", 0.033),
+         "20261124_026_R005.tif": ("R", 0.042), "20261124_031_R005.tif": ("L", 0.032),
+         "20261124_035_R005.tif": ("L", 0.035)}
+found = {f.name: f for f in ROLLS.glob("Roll 00[456]*/RAW/*.tif")} if ROLLS.exists() else {}
+if not any(n in found for n in SIDES):
+    print("   (not here: skipped)")
+for name, (side, end) in SIDES.items():
+    if name not in found:
+        continue
+    a = tifffile.imread(found[name])
+    a = (a if a.shape[-1] in (3, 4) else np.moveaxis(a, 0, -1))[::4, ::4, :3].astype(np.float32)
+    a = np.rot90(a) if a.shape[0] > a.shape[1] else a   # the strip runs across, as the scanner sees it
+    r = find_picture([a[..., c] for c in range(3)])
+    cut = None if r is None else (r[0] if side == "L" else 1 - r[2])
+    check(f"{name}: the {side} gap goes, and no more than 1.5% past it", cut is not None and end <= cut <= end + 0.015, str(r))
 
 print("C in the app")
 def fresh(**kw):

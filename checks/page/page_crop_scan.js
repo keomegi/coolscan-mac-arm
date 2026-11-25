@@ -4,9 +4,14 @@ const [port, shotDir] = process.argv.slice(2);
 (async () => {
   const b = await chromium.launch();
   const p = await (await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 })).newPage();
+  // the Scan quality and Save as boxes start folded since 2026-11-23: open them, as they were when this script was written
+  await p.addInitScript(() => { try { if (!localStorage.getItem('coolscan.cards')) localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-save': true})); } catch (e) {} });
   const errs = []; p.on('pageerror', e => errs.push(String(e))); p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await p.goto('http://127.0.0.1:' + port + '/');
   await p.waitForFunction(() => document.querySelectorAll('.tile img').length >= 4, null, { timeout: 30000 });
+  // written when Archive mode started off (it starts on since 2026-11-24): switch it off first
+  await p.evaluate(() => fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archive: false }) }));
+  await p.waitForFunction(() => !document.getElementById('s-archive').checked, null, { timeout: 10000 });
   const post = (path, body) => p.evaluate(([path, body]) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(r => r.json()), [path, body]);
   const state = () => p.evaluate(() => fetch('/api/state').then(r => r.json()));
   const idle = () => p.waitForFunction(() => document.getElementById('busy').hidden && !document.getElementById('b-scan').disabled, null, { timeout: 120000 });
@@ -20,9 +25,9 @@ const [port, shotDir] = process.argv.slice(2);
   out.saved_off = (await state()).settings.crop_scan;
   out.words_off = await p.textContent('#vsaved');
   await p.check('#s-crop_scan'); await p.waitForTimeout(800);
-  await p.check('#s-archive'); await p.waitForTimeout(1200);
+  await p.check('#s-archive', { force: true }); await p.waitForTimeout(1200);
   out.archive = { box_visible: await p.isVisible('#s-crop_scan'), words: await p.textContent('#vsaved') };
-  await p.uncheck('#s-archive'); await p.waitForTimeout(1200);
+  await p.uncheck('#s-archive', { force: true }); await p.waitForTimeout(1200);
   await p.click('#b-scan'); await p.waitForTimeout(500); await idle(); await p.waitForTimeout(1200);
   out.badge = await p.$$eval('.tile[data-i="1"] .badge', e => e.map(x => x.textContent));
   out.after = { src: await p.isVisible('#vsrc') ? await p.textContent('#vsrc') : null, info: (await state()).tiles[1].info };

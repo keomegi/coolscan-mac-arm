@@ -34,6 +34,7 @@ PAGES = {
     "page_profiles.js": ((), {}, None),
     "page_crop_scan.js": ((), {}, None),
     "page_crop_handles.js": ((), {}, None),
+    "page_roll_optional.js": ((), {}, None),
     "page_auto_crop.js": ((), {"COOLSCAN_DEMO_BORDERS": "1"}, None),
     # already failing before the folders were moved (waits for 4 results that do not come); left to fix in test mode
     "page_test_mode.js": (("--test",), {}, [needs_testmode, pytest.mark.xfail(reason="failed before the move too", strict=False)]),

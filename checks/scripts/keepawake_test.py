@@ -1,5 +1,6 @@
 """Keeping the Mac awake during jobs, and noticing a sleep (no Mac needed: a pretend caffeinate)."""
 import os, sys, tempfile, time, threading
+import xml.sax.saxutils  # noqa: F401 - loaded now: imported later with sys.platform faked to "darwin", it looks for _scproxy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]

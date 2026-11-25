@@ -5,6 +5,7 @@ import struct
 
 import numpy as np
 
+from . import gpu
 from .enhance import restore_colour
 
 PREVIEW_MAX_SIDE = 1600  # pixels; pictures for the screen are never larger than this
@@ -163,7 +164,7 @@ def display_image(planes, film, invert=True, tone="nikon", restore=0, profile=No
     rows, cols = stack[0].shape
     step = max(1, math.ceil(max(rows, cols) / PREVIEW_MAX_SIDE))
     out = []
-    if film in ("negative", "mono") and invert:
+    if film in ("negative", "mono", "chromo") and invert:
         # the same conversion as "save as positive", so the preview shows what is saved
         for v in restore_colour(invert_negative([p[::step, ::step] for p in stack], tone, profile, exposures), restore):
             out.append((v * 255 + 0.5).astype(np.uint8))
@@ -278,6 +279,10 @@ def to_srgb8(planes, space):
     """
     if len(planes) != 3:
         return (planes[0] >> 8).astype(np.uint8)
+    if space in COLOUR_SPACES and space != "sRGB IEC61966-2.1" and gpu.ready(planes[0].size):
+        img = gpu.run(gpu.to_srgb8, planes, space)
+        if img is not None:
+            return img
     rgb = np.stack([p.astype(np.float32) / 65535 for p in planes], axis=-1)
     if space in COLOUR_SPACES and space != "sRGB IEC61966-2.1":
         gamma = COLOUR_SPACES[space][2]
@@ -367,6 +372,10 @@ def convert_planes(planes, space, scanner_icc=None):
     prof = ScannerProfile(scanner_icc) if scanner_icc else None
     if prof is None and space == "sRGB IEC61966-2.1":
         return planes, icc_profile(space)
+    if gpu.ready(planes[0].size):
+        out = gpu.run(gpu.convert_scanner, planes, space, prof) if prof else gpu.run(gpu.convert_srgb, planes, space)
+        if out is not None:
+            return out, icc_profile(space)
     srgb_m = None if prof else _space_matrix("sRGB IEC61966-2.1")[0]
     rows, cols = planes[0].shape
     out = [np.empty((rows, cols), np.uint16) for _ in range(3)]

@@ -4,6 +4,8 @@ import math
 
 import numpy as np
 
+from . import gpu
+
 
 #
 # Our own stand-ins for Nikon Scan's GEM (grain) and ROC (faded colours). Both
@@ -63,6 +65,10 @@ def reduce_grain(planes, strength, progress=None):
     k = GRAIN_LEVELS.get(int(strength or 0))
     if not k:
         return planes
+    if gpu.ready(planes[0].size):
+        done = gpu.run(gpu.reduce_grain, planes, k, progress)
+        if done is not None:
+            return done
     if len(planes) == 3:
         r, g, b = planes
         parts = [((r + g + b) * np.float32(1 / 3), k), (r - b, 1.6 * k), ((r + b) * np.float32(0.5) - g, 1.6 * k)]

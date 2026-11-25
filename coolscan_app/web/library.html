@@ -1,0 +1,220 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan library</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+/* the library page: folders on the left, one folder's pictures on the right, one picture big over them */
+main.lib{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr)}
+#bar a{color:var(--acc);text-decoration:none;padding:0 4px}
+#bar a:hover{text-decoration:underline}
+#rolls{border-right:1px solid var(--line);background:var(--panel);overflow:auto;padding:8px 0}
+#rolls .base{padding:4px 14px 8px;color:var(--ink2);font-size:12px;word-break:break-all}
+#rolllist{list-style:none;margin:0;padding:0}
+#rolllist button{all:unset;box-sizing:border-box;display:block;width:100%;padding:7px 14px;cursor:pointer;border-left:3px solid transparent}
+#rolllist button:hover{background:color-mix(in srgb,var(--acc) 7%,transparent)}
+#rolllist button:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+#rolllist button[aria-current=true]{background:color-mix(in srgb,var(--acc) 15%,transparent);border-left-color:var(--acc)}
+#rolllist .rname{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rolllist .rsub,#rolllist .rdesc{display:block;font-size:12px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rolllist .rtag{font-size:11px;color:var(--acc);margin-left:6px;font-weight:500}
+#roll{overflow:auto;padding:14px 18px 24px}
+#roll .head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-bottom:8px}
+#roll h2{font-size:17px}
+.hint{color:var(--ink2);font-size:12px}
+#desc{width:100%;min-height:64px;max-height:40vh;resize:vertical;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink)}
+.descrow{display:flex;align-items:center;gap:10px;margin:6px 0 14px}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.pic{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:4px;min-width:0;border-radius:8px;padding:6px;border:1px solid transparent}
+.pic:hover{border-color:var(--line)}
+.pic:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.pic .ph{aspect-ratio:3/2;background:var(--stage);border-radius:5px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.pic img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.pic .cap{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pic .marks{font-size:11px;color:var(--ink2)}
+/* one picture big */
+#viewer{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;grid-template-rows:auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr) 320px}
+#info{grid-row:2/4;grid-column:2}
+#strip{grid-row:3;grid-column:1;display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:6px 10px;background:var(--panel);border-top:1px solid var(--line);scrollbar-width:thin}
+#strip button{all:unset;box-sizing:border-box;flex:0 0 auto;height:64px;width:92px;border-radius:5px;border:2px solid transparent;background:var(--stage);cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+#strip button img{max-width:100%;max-height:100%;display:block}
+#strip button[aria-current=true]{border-color:var(--acc)}
+#strip button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+#strip button .n{position:absolute;right:3px;bottom:1px;font-size:10px;color:#fff;text-shadow:0 0 2px #000}
+#vbar{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+#vbar .title{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 200px}
+#stage{position:relative;background:var(--stage);display:flex;align-items:center;justify-content:center;min-height:0;overflow:hidden;padding:12px 12px 62px}
+#pictools{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;
+  padding:6px 8px;border-radius:10px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:calc(100% - 20px)}
+#pictools button,#pictools select{height:26px;padding:0 8px;font-size:12px}
+#pictools{flex-wrap:nowrap;overflow-x:auto;gap:4px}
+#pictools .sep{width:1px;align-self:stretch;background:var(--line);margin:0 2px}
+#pictools #origtag{font-size:12px;color:var(--ink2)}
+#pictools #b-orig[aria-pressed=true]{border-color:var(--acc);color:var(--acc)}
+.pic .ed{color:var(--acc);margin-left:6px}
+#imgwrap{position:relative;line-height:0;user-select:none;max-width:100%;max-height:100%}
+#big{display:block;max-width:100%;max-height:calc(100vh - 150px);image-orientation:none}
+#loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#ccc;font-size:13px;line-height:1.4}
+body.cropping #imgwrap{cursor:crosshair}
+#cropbox{position:absolute;border:2px solid #fff;box-shadow:0 0 0 1px #000,0 0 0 9999px rgba(0,0,0,.55);pointer-events:none}
+#info{overflow:auto;border-left:1px solid var(--line);background:var(--panel);padding:10px 14px 20px}
+#info h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink2);margin:14px 0 4px;font-weight:600}
+#info h3:first-child{margin-top:2px}
+#learnbox{margin:4px 0 6px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+#learnbox .btnrow{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+#learnbox .btnrow button{height:26px;padding:0 8px;font-size:12px}
+#learnrep{font-size:12px}
+.clrow{padding:5px 0;border-top:1px solid var(--line)}
+.clrow>b{display:block;font-weight:600;margin-bottom:2px}
+.clrow code{overflow-wrap:anywhere}
+table.clr{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+table.clr th{font-weight:600;color:var(--ink2);text-align:left;padding:2px 4px}
+table.clr td{padding:2px 4px;border-top:1px solid var(--line)}
+table.clr th:first-child,table.clr td:first-child{padding-left:0}
+#info dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;margin:0}
+#info dt{color:var(--ink2)}
+#info dd{margin:0;word-break:break-word}
+#info .vlink{all:unset;color:var(--acc);cursor:pointer;display:block;word-break:break-all}
+#info .vlink:hover{text-decoration:underline}
+#info .vlink[aria-current=true]{font-weight:600;color:var(--ink)}
+#croptools{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#cropmsg{font-size:12px}
+.ok{color:var(--ok)}
+.warn{color:var(--warn)}
+#search{width:calc(100% - 28px);margin:0 14px 8px;height:28px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink);font:inherit}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:4px 0 10px}
+.toolbar label{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--ink2)}
+#actions{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:0 0 12px;background:var(--panel);display:flex;flex-direction:column;gap:6px}
+#actions .arow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+#actions .arow>b{font-size:12px;min-width:84px;color:var(--ink2);font-weight:600}
+#actions input[type=text],#actions input[type=date],#actions input[type=datetime-local],#actions input[type=number]{height:28px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink);font:inherit}
+#actmsg{font-size:12px}
+.stars{display:inline-flex;gap:0}
+.stars button{border:0;background:none;padding:0 2px;height:24px;font-size:17px;color:var(--ink2);cursor:pointer}
+.stars button.on{color:#e0a100}
+.pic{position:relative}
+.pic .tick{position:absolute;top:10px;left:10px;width:18px;height:18px;margin:0;z-index:2;accent-color:var(--tick)}
+.pic.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.pic .rate{font-size:12px;color:#e0a100;min-height:16px}
+.pic .rate .fl{color:var(--ok);margin-left:6px}
+.pic .rate .rj{color:var(--bad,#c42b1c);margin-left:6px}
+.pic .rate .rd{color:var(--acc);margin-left:6px}
+.pic.rejected img{opacity:.45}
+.pic .tagline{font-size:11px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:10px;padding:0 4px 0 8px;font-size:12px;height:22px}
+.chip button{all:unset;cursor:pointer;padding:0 4px;color:var(--ink2)}
+#edit textarea{width:100%;min-height:48px;resize:vertical;font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink)}
+#edit input[type=text]{height:24px;padding:0 6px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink);font:inherit;width:140px}
+#edit .erow{margin:6px 0}
+#edit .flags button{height:24px;padding:0 8px;font-size:12px}
+#stage.two{gap:10px}
+#stage.two #imgwrap,#stage.two #imgwrap2{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center}
+#stage.two #big,#stage.two #big2{max-width:100%;max-height:calc(100vh - 180px)}
+#imgwrap2{line-height:1.3;color:#ccc;font-size:12px;text-align:center}
+#imgwrap .cap2,#imgwrap2 .cap2{display:none}
+#stage.two .cap2{display:block;color:#ccc;font-size:12px;line-height:1.4;margin-top:4px}
+#vbar .more{display:flex;flex-wrap:wrap;gap:6px}
+@media (max-width:820px){main.lib{grid-template-columns:1fr}#rolls{max-height:34vh;border-right:0;border-bottom:1px solid var(--line)}
+  #viewer{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr) auto 40vh}#info{grid-row:4;grid-column:1;border-left:0;border-top:1px solid var(--line)}#strip{grid-row:3}}
+</style></head><body>
+<header id="bar">
+<div class="brand"><h1>Coolscan library</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
+<div class="tools">
+<button id="b-reload" title="Look at the folders again (R)">Refresh</button>
+<span class="gap"></span>
+<a href="/develop" id="devlink" title="Make pictures again from RAW files; pictures tagged ↻ are listed there">Re-develop</a>
+<a href="/" title="Back to scanning">Scanning screen</a>
+</div>
+</header>
+<main class="lib">
+<nav id="rolls" aria-label="Folders">
+<div class="base" id="base"></div>
+<input type="search" id="search" placeholder="Search all rolls: person, tag, caption, 1988…" aria-label="Search all rolls">
+<ul id="rolllist"></ul>
+<p class="hint" id="norolls" hidden style="padding:0 14px"></p>
+</nav>
+<section id="roll" aria-label="Pictures in the folder">
+<p class="hint" id="pickroll">Pick a folder on the left.</p>
+<div id="rollbody" hidden>
+<div class="head"><h2 id="rname"></h2><span class="hint" id="rpath"></span></div>
+<label for="desc" class="hint">Description (saved as Description.txt in the folder)</label>
+<textarea id="desc" spellcheck="true" placeholder="Film, camera, where and when, anything worth keeping with the roll"></textarea>
+<div class="descrow"><button id="b-desc" disabled>Save description</button><span id="descmsg" class="hint" role="status"></span></div>
+<div class="toolbar" id="filters">
+<label>Stars<select id="f-stars"><option value="0">Any</option><option value="1">★ 1 or more</option><option value="2">★★ 2+</option><option value="3">★★★ 3+</option><option value="4">★★★★ 4+</option><option value="5">★★★★★</option></select></label>
+<label>Flag<select id="f-flag"><option value="">Any</option><option value="pick">Picks</option><option value="notreject">Not rejected</option><option value="reject">Rejected</option><option value="redo">↻ Tagged for re-develop</option></select></label>
+<label>Tag<select id="f-tag"><option value="">Any</option></select></label>
+<label>Person<select id="f-person"><option value="">Anyone</option></select></label>
+<span class="gap"></span>
+<button id="b-selall" title="Tick every picture shown (A)">Select all</button>
+<button id="b-selnone" hidden>Select none</button>
+<span class="hint" id="shown"></span>
+</div>
+<div id="actions" hidden aria-label="Change the ticked pictures">
+<div class="arow"><b id="selcount"></b>
+<span class="stars" id="a-stars" aria-label="Stars"></span>
+<button id="a-pick" title="Flag as a pick (P)">⚑ Pick</button><button id="a-reject" title="Flag as rejected (X)">✕ Reject</button><button id="a-unflag" title="No flag (U)">No flag</button>
+<button id="a-redo" title="Tag to develop again from the RAW files, on the Re-develop page">↻ Tag for re-develop</button><button id="a-unredo">Untag</button></div>
+<div class="arow"><b>Tags</b><input type="text" id="a-tag" list="alltags" placeholder="tag, another tag" aria-label="Tags to add"><button id="a-addtag">Add</button>
+<select id="a-rmtag" aria-label="Tag to take off"><option value="">Take a tag off…</option></select></div>
+<div class="arow"><b>People</b><input type="text" id="a-person" list="allpeople" placeholder="Name, another name" aria-label="People to add"><button id="a-addperson">Add</button>
+<select id="a-rmperson" aria-label="Person to take off"><option value="">Take a person off…</option></select></div>
+<div class="arow"><b>Caption</b><input type="text" id="a-caption" style="flex:1 1 260px" placeholder="The same caption for all ticked pictures" aria-label="Caption"><button id="a-setcap">Set caption</button></div>
+<div class="arow"><b>Photo taken</b>
+<select id="a-how" aria-label="How to change the date"><option value="year" title="Month, day and time stay">Year only</option><option value="date" title="Each time of day stays, so the order stays">Day</option><option value="exact" title="One second apart, in order">Date and time</option></select>
+<input type="number" id="a-year" min="1850" max="2100" placeholder="1988" style="width:90px" aria-label="Year">
+<input type="date" id="a-date" hidden aria-label="Day"><input type="datetime-local" id="a-exact" hidden aria-label="Date and time">
+<button id="a-setdate">Change date</button>
+<input type="text" id="a-datenote" placeholder="Date note, e.g. about 1988, Aunt Ilze thinks" style="flex:1 1 220px" aria-label="Date note"><button id="a-setnote">Set note</button></div>
+<div class="arow"><b>Crop</b><button id="a-autocrop" title="Find each picture's edges and crop to them (kept as a setting; the files are not changed)">Auto crop</button><button id="a-croplearn" title="Learn how you crop from the crops you have made (in the Library and on the scanning screen), so Auto crop crops the same way">Learn from my crops</button>
+<button id="a-reset" title="Take the crop and turn off">Reset crop &amp; turn</button>
+<button id="a-export" title="Save copies with the crop and turn put in, in the folder's Edited folder">Export edited copies</button></div>
+<div class="arow"><b>Files</b><button id="a-finder">Show in Finder</button><button id="a-lr">Open in Lightroom</button>
+<button id="a-jpeg">Export JPEGs</button><select id="a-side" aria-label="JPEG size"><option value="1600">1600 px</option><option value="2048" selected>2048 px</option><option value="3000">3000 px</option><option value="8000">Full size</option></select></div>
+<div id="actmsg" class="hint" role="status"></div>
+</div>
+<datalist id="alltags"></datalist><datalist id="allpeople"></datalist>
+<div id="grid" role="list"></div>
+<p class="hint" id="nopics" hidden>No pictures in this folder.</p>
+</div>
+</section>
+</main>
+
+<div id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="vtitle">
+<div id="vbar">
+<button id="b-close" title="Back to the folder (Esc)">✕ Close</button>
+<button class="icon" id="b-prev" title="Previous picture (←)" aria-label="Previous picture">‹</button>
+<button class="icon" id="b-next" title="Next picture (→)" aria-label="Next picture">›</button>
+<span class="title" id="vtitle"></span>
+<span class="more">
+<button id="b-compare" aria-pressed="false" title="Show another version beside it (V)" hidden>Compare</button>
+<select id="cmpwith" hidden aria-label="Compare with"></select>
+<button id="b-finder" title="Show the file in Finder">Finder</button>
+<button id="b-lr" title="Open the file in Lightroom">Lightroom</button>
+<button id="b-jpeg" title="Save a 2048 px sRGB JPEG, with the crop and turn, in the folder's JPEG folder">JPEG</button>
+</span>
+</div>
+<div id="stage"><div id="imgwrap"><img id="big" alt=""><div id="cropbox" hidden></div><span class="cap2" id="cap1"></span></div><div id="imgwrap2" hidden><img id="big2" alt=""><span class="cap2" id="cap2"></span></div><span id="loading">Loading…</span>
+<div id="pictools" role="toolbar" aria-label="Crop and turn">
+<button id="b-orig" hidden title="Switch between your edited copy and the picture as it was saved (O)">Show original</button>
+<span id="origtag" hidden></span>
+<span class="sep" id="sep1" hidden></span>
+<button id="b-turnl" title="Turn a quarter to the left (kept as a setting; the file is not changed)">⟲ Left</button>
+<button id="b-turnr" title="Turn a quarter to the right (kept as a setting; the file is not changed)">Right ⟳</button>
+<span class="sep"></span>
+<button id="b-autocrop" title="Find the picture inside the frame and mark it, leaving out the film's edges, holder and gap (A)">Auto crop</button>
+<button id="b-crop" aria-pressed="false" title="Drag on the picture to mark the part to keep (C)">Crop…</button>
+<select id="shape" aria-label="Crop shape" hidden><option value="0">Free</option><option value="1.5">3:2</option><option value="1.3333">4:3</option><option value="1.25">5:4</option><option value="1">Square</option></select>
+<button id="b-cropclear" hidden title="Take the crop off">No crop</button>
+<button class="primary" id="b-cropsave" hidden disabled title="Keep this crop (the file itself is not changed)">Done</button>
+<button id="b-raw" hidden title="Open the whole frame from the RAW file on the Re-develop page, where the crop can also be made larger">Crop from RAW…</button>
+<button id="b-reset" hidden title="Take the crop and turn off">Reset</button>
+<button id="b-export" hidden title="Save a copy with the crop and turn put in, in the folder's Edited folder">Export copy</button>
+</div></div>
+<div id="strip" role="list" aria-label="Pictures in this folder"></div>
+<aside id="info" aria-label="About this picture"><p class="hint" id="cropmsg" role="status"></p>
+<div id="learnbox"><h3>Auto crop learning</h3><p class="hint" id="learnline"></p>
+<div class="btnrow"><button id="b-learnnow" title="Learn now from all your crops (in the Library and on the scanning screen)">Learn now</button><button id="b-learnrep" aria-expanded="false">Learning report</button></div>
+<div id="learnrep" hidden></div></div><div id="edit"></div><div id="meta"></div></aside>
+</div>
+<script src="/library.js"></script>
+</body></html>

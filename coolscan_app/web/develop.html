@@ -35,6 +35,10 @@ body.cropping #over{cursor:cell}
 #pieces figcaption{font-size:12px;margin-top:4px;color:var(--ink2)}
 #notes p{margin:4px 0}
 .warn{color:var(--warn)}
+.taglist{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.taglist li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.taglist .tn{font-weight:600}
+.taglist .tf{font-size:12px;color:var(--ink2);flex:1 1 300px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #zoomimg.pixels{image-rendering:pixelated;width:min(96vw,960px);max-height:none}
 </style></head><body>
 <header id="bar">
@@ -43,11 +47,17 @@ body.cropping #over{cursor:cell}
 <button class="primary" id="b-run" title="Develop the ticked files (or all of them) into a new folder">Develop all files</button>
 <button id="b-stop" disabled title="Stop after the current file">Stop</button>
 <span class="gap"></span>
+<a href="/library" title="Past scans: tag pictures ↻ Re-develop there">Library</a>
 <a href="/" title="Back to scanning">Scanning screen</a>
 </div>
 <div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span></div>
 </header>
 <main class="dev">
+
+<section aria-label="Tagged in the Library" id="tagged" hidden>
+<div class="head"><h2>Tagged in the Library</h2><span class="hint">Pictures you tagged ↻ Re-develop in the <a href="/library">Library</a>. Open a roll's tagged pictures here: they come up ticked, ready to develop.</span></div>
+<ul class="taglist" id="taglist"></ul>
+</section>
 
 <section aria-label="RAW files">
 <div class="head"><h2>1. RAW files</h2><span class="hint">Archive mode keeps the untouched scan with its infrared in each roll's RAW folder. Pick a roll, or type a folder.</span></div>
@@ -65,7 +75,7 @@ body.cropping #over{cursor:cell}
 <div id="howform">
 <label>Film<select id="h-film">
 <option value="">As the file says</option><option value="negative">Colour negative</option><option value="positive">Slide (positive)</option>
-<option value="kodachrome">Kodachrome</option><option value="mono">Black-and-white negative</option></select></label>
+<option value="kodachrome">Kodachrome</option><option value="mono">Black-and-white negative (silver)</option><option value="chromo">Black-and-white chromogenic (C-41)</option></select></label>
 <label>Colour of negatives<select id="h-film_profile"></select></label>
 <label>Negative tone<select id="h-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label>Colour space<select id="h-colour_space"></select></label>
@@ -73,6 +83,7 @@ body.cropping #over{cursor:cell}
 <label>Grain reduction<select id="h-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
 <label>Dust removal by<select id="h-dust_method"><option value="builtin">Built in</option><option value="ice">Nikon ICE (helper)</option></select></label>
 <label class="tickrow"><input type="checkbox" id="h-clean"><span>Dust &amp; scratch removal</span></label>
+<p class="hint" id="kchint" hidden>Kodachrome: its cyan dye blocks infrared much as dust does, so dust removal can paint over parts of the picture. Check the result closely, or untick it.</p>
 </div>
 <p class="hint">The driver's dust removal (the older method) is not offered here: it works by scanning the film a second time.</p>
 </section>
@@ -98,6 +109,7 @@ body.cropping #over{cursor:cell}
 <section aria-label="Save">
 <div class="head"><h2>4. Save</h2><span class="hint">Each run saves into a new folder, Re-developed/&lt;date and time&gt; inside the roll's folder, with the same file names as the RAW files and a Develop log.txt. Nothing is ever overwritten.</span></div>
 <label class="tickrow"><input type="checkbox" id="extras"> Also save the in-between steps, to compare them: the file with the dust removed as scanned (not inverted), and the finished picture without dust removal</label>
+<label class="tickrow"><input type="checkbox" id="untag"> Take the Library's ↻ Re-develop tag off each picture once it is developed</label>
 <div id="results"></div>
 </section>
 

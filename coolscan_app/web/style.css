@@ -76,10 +76,10 @@ section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 .head .hint{margin:0}
 
 /* frames: small pictures in two rows */
-#tiles{display:grid;grid-template-columns:repeat(var(--cols,3),minmax(0,1fr));gap:8px}
+#tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:12px}
 .tile{position:relative;border:2px solid transparent;border-radius:8px;background:var(--stage);cursor:pointer;overflow:hidden}
-.tile .pic{height:100px;display:flex;align-items:center;justify-content:center}
-.tile img{max-width:100%;max-height:100px;display:block;image-orientation:none}
+.tile .pic{aspect-ratio:3/2;display:flex;align-items:center;justify-content:center}
+.tile img{width:100%;height:100%;object-fit:contain;display:block;image-orientation:none}
 .tile .none{color:#a1a1a6;font-size:12px}
 .tile.cur{border-color:var(--acc)}
 .tile .tick{position:absolute;left:6px;top:6px;display:flex;align-items:center;gap:5px;padding:2px 7px 2px 5px;border-radius:5px;background:rgba(0,0,0,.62);color:#fff;font-size:12px;font-weight:600;cursor:pointer}
@@ -89,12 +89,6 @@ section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 .tile .badge{position:absolute;right:6px;top:6px;background:rgba(0,0,0,.62);color:#fff}
 .tile .badge.scan,.chip.scan{background:var(--ok);color:#fff}
 .tile .badge.preview,.chip.preview{background:var(--accfill);color:#fff}
-#stripbox{margin-top:8px}
-#stripbox>summary{cursor:pointer;color:var(--ink2);font-size:12px}
-#thumbwrap{position:relative;overflow-x:auto;margin-top:6px}#thumbwrap .inner{position:relative;display:inline-block}
-#thumb{display:block;max-width:none;height:120px}
-.box{position:absolute;border:1.5px solid #4da3ff;color:#fff;font-size:11px;cursor:pointer}
-.box span{background:#0066cc;padding:0 3px}.box.cur{border-color:#ffd60a}.box.cur span{background:#ffd60a;color:#000}
 
 /* the big picture of the frame being looked at */
 #stage{background:var(--stage);border-radius:8px;min-height:260px;display:flex;align-items:center;justify-content:center;padding:8px}
@@ -129,6 +123,9 @@ body.picking #cropbox{pointer-events:none}
 
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);padding:16px;max-width:min(92vw,460px);box-shadow:0 12px 40px rgba(0,0,0,.35)}
 dialog::backdrop{background:rgba(0,0,0,.45)}
+body.noroll #g-roll{display:none}
+.overwritelist{margin:6px 0 6px 18px;font:12px ui-monospace,Menlo,monospace;max-height:200px;overflow:auto}
+button.danger{background:var(--stopfill,#d70015);color:#fff;border-color:transparent}
 dialog h2{font-size:15px;margin-bottom:8px}
 dialog .btnrow{justify-content:flex-end;margin-top:12px}
 #zoom{max-width:none;width:100vw;height:100vh;max-height:none;border:0;border-radius:0;padding:0;background:#000;cursor:zoom-out}
@@ -137,3 +134,145 @@ dialog .btnrow{justify-content:flex-end;margin-top:12px}
 #zoomcap{position:fixed;left:12px;bottom:10px;color:#d1d1d6;font-size:12px}
 #bar a.pagelink{color:var(--acc);text-decoration:none;padding:0 4px;font-size:13px}
 #bar a.pagelink:hover{text-decoration:underline}
+
+/* ---- the main page (index.html) only: the other pages share this file and keep their own layout ---- */
+:root{--bad:#c42b1c}
+@media (prefers-color-scheme:dark){:root{--bad:#ff6b5e}}
+button.small{height:24px;padding:0 9px;font-size:12px}
+/* the bar: the name and what the scanner is doing may take two lines rather than being cut off */
+body.main .brand{flex-direction:column;align-items:flex-start;gap:0;flex:1 1 220px}
+body.main #status{white-space:normal;font-size:12px;line-height:1.35}
+/* Connect, Load and Eject are needed now and then: quieter than the actions on the film */
+body.main .quiet{display:flex;gap:2px}
+body.main .quiet button{border-color:transparent;background:transparent;color:var(--ink2);padding:0 8px}
+body.main .quiet button:hover:not(:disabled){border-color:var(--line);color:var(--ink)}
+/* the second line of the bar: progress while something runs, the latest Activity line, and the button for the whole list */
+#actline{flex:1 1 100%;display:flex;align-items:center;gap:12px;min-height:24px;min-width:0}
+body.main #busy{flex:0 1 auto;min-width:0}
+body.main #timing{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#lastline{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#lastline.bad{color:var(--bad)}
+#b-log{flex:none;display:flex;align-items:center;gap:6px}
+#b-log::after{content:"";width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:-3px 0 0 2px}
+#b-log[aria-expanded=true]::after{transform:rotate(-135deg);margin:3px 0 0 2px}
+.warnbadge{background:var(--bad);color:#fff;border-radius:8px;font-size:11px;font-weight:600;padding:0 6px;line-height:16px}
+body.main #bar{position:relative}
+/* the whole list opens over the page, under the bar, so nothing below it moves */
+body.main #activity{position:absolute;top:calc(100% - 4px);right:16px;width:min(900px,calc(100vw - 32px));padding:10px 12px;margin:0;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.28);z-index:20}
+body.main #activity .head{margin-bottom:4px}
+body.main #log{max-height:50vh}
+body.main #progtxt{white-space:nowrap;flex:none;min-width:0}
+body.main #busy progress{flex:0 1 200px;min-width:80px}
+body.main #timing{flex:0 1 auto}
+body.main #vinfo{flex:1 1 160px;min-width:0}
+body.main #viewer .head .grow{display:none}
+#log .bad{color:var(--bad)}
+/* settings: a little wider, so the choices are read in full */
+body.main main{grid-template-columns:368px minmax(0,1fr)}
+body.main #side select{width:200px}
+body.main #side .inline select.grow{flex:1;width:auto;min-width:0}
+label.above{display:block;margin:8px 0 2px}
+#s-outdir.wide{width:100%}
+/* the frame being scanned right now */
+.tile.now{border-color:var(--ok)}
+.tile .badge.now{background:var(--ok);color:#fff;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.7}}
+@media (prefers-reduced-motion:reduce){.tile .badge.now{animation:none}}
+.tile:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+/* crop: shape and size */
+#croptools{display:flex;align-items:center;gap:8px;margin:0 0 8px;flex-wrap:wrap}
+#croptools select{width:auto}
+#croptools .hint{margin:0;font-variant-numeric:tabular-nums}
+/* the buttons that act once on the frame shown */
+/* Focus & exposure: the buttons that act now, each with what it does to the settings above */
+#g-focus .act{display:grid;grid-template-columns:112px 1fr;gap:8px;align-items:start;margin:6px 0}
+#g-focus .act button{width:100%}
+#g-focus .act .hint{margin:4px 0 0}
+button.attn:not(:disabled){border-color:var(--warn);color:var(--warn);box-shadow:0 0 0 1px var(--warn) inset;font-weight:600}
+#viewfoot{display:flex;justify-content:flex-end;margin-top:8px}
+table.keys{border-collapse:collapse;font-size:13px}
+table.keys td{padding:4px 8px;vertical-align:top;border-top:1px solid var(--line2)}
+table.keys td:first-child{white-space:nowrap;padding-left:0}
+kbd{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--bg)}
+#keysdlg{max-width:min(92vw,560px)}
+
+/* Stop: red while there is something to stop, on every page; plain and greyed out when there is not */
+:root{--stopfill:#d70015}
+#b-stop:not(:disabled){background:var(--stopfill);border-color:var(--stopfill);color:#fff;font-weight:600}
+#b-stop:not(:disabled):hover{filter:brightness(1.08)}
+
+/* where each frame sits on the strip: fit to the gaps (Frames heading) and moving one frame by hand */
+.head label.check{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12px;cursor:pointer;margin-right:4px}
+#framepos{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px}
+#framepos .lbl{color:var(--ink2)}
+#framepos .hint{margin:0}
+.tile .moved{position:absolute;left:6px;bottom:6px;font-size:11px;font-weight:600;padding:1px 6px;border-radius:9px;background:rgba(0,0,0,.62);color:#ffd60a}
+
+/* Additional settings: how to set up each way of sending a message */
+ul.how{margin:4px 0 0;padding-left:18px;color:var(--ink2);font-size:12px}
+ul.how li{margin:0 0 6px}
+#g-extra code{font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* the settings of the next scan (or of the one running), under the name of the app */
+#setline{flex:1 1 100%;display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12px}
+#setline .lbl{color:var(--ink2);flex:none}
+#setchips{display:flex;flex-wrap:wrap;gap:4px 6px;min-width:0}
+.setchip{background:var(--line2);color:var(--ink);border-radius:9px;padding:0 7px;line-height:18px;white-space:nowrap}
+
+/* frames as cards: the frame's settings on the left, its picture on the right */
+.tile{display:grid;grid-template-columns:minmax(132px,34%) 1fr}
+.tile .pic{position:relative;min-width:0}
+.tile .side{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:8px 8px 8px 8px;color:#e5e5ea;font-size:12px;border-right:1px solid rgba(255,255,255,.08);min-width:0}
+.tile .side .tick{position:static}
+.tile .own{font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;background:rgba(255,255,255,.12);color:#d1d1d6}
+.tile.hasown .own{background:#ff9f0a;color:#1c1c1e}
+.tile ul.fs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;line-height:1.3;color:#aeaeb2}
+.tile ul.fs li.mine{color:#ffd60a;font-weight:600}
+.tile .fsbtn{margin-top:auto;font-size:11px;padding:2px 7px;background:rgba(255,255,255,.1);color:#e5e5ea;border:1px solid rgba(255,255,255,.18)}
+.tile .fsbtn:hover{background:rgba(255,255,255,.2)}
+.setchip.own{background:#ff9f0a;color:#1c1c1e;font-weight:600}
+.chip.own{background:#ff9f0a;color:#1c1c1e;border:0;cursor:pointer}
+#viewfoot{display:flex;gap:8px;align-items:center}
+#framedlg{max-width:min(92vw,480px)}
+#fsrows label.row.mine span{color:#c93400;font-weight:600}
+@media (prefers-color-scheme:dark){#fsrows label.row.mine span{color:#ff9f0a}}
+#fs-alsorow{display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px}
+#viewfoot .grow{flex:1}
+#framedlg{max-width:min(94vw,560px)}
+#fsrows select{width:250px}
+.tile .pic{aspect-ratio:auto;height:172px}
+
+/* Archive mode switch at the top: on by default, so it is easy to see whether it is on */
+.archtoggle{position:relative;display:flex;align-items:center;gap:10px;padding:5px 14px 5px 8px;border:1.5px solid var(--line);border-radius:999px;cursor:pointer;user-select:none;background:var(--panel);flex:none}
+.archtoggle input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.archtoggle .sw{position:relative;width:34px;height:20px;border-radius:10px;background:var(--line);flex:none;transition:background .15s}
+.archtoggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.35);transition:left .15s}
+.archtoggle .txt{display:flex;flex-direction:column;line-height:1.15}
+.archtoggle .txt b{font-size:14px}
+.archtoggle .txt small{font-size:11.5px;color:var(--ink2)}
+.archtoggle.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--panel))}
+.archtoggle.on .sw{background:var(--accfill)}
+.archtoggle.on .sw::after{left:16px}
+.archtoggle.on .txt small{color:var(--acc)}
+.archtoggle:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
+
+/* the learning report (Additional settings › Auto crop learning) */
+#croplearnreport{font-size:13px}
+.clrow{padding:6px 0;border-top:1px solid var(--line2)}
+.clrow>b{display:block;font-weight:600;margin-bottom:2px}
+.clrow code{overflow-wrap:anywhere}
+table.clr{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+table.clr th{font-weight:600;color:var(--ink2);text-align:left;padding:2px 4px}
+table.clr td{padding:2px 4px;border-top:1px solid var(--line2)}
+table.clr th:first-child,table.clr td:first-child{padding-left:0}
+/* the Settings window */
+#setdlg{width:min(94vw,560px);max-width:min(94vw,560px);max-height:88vh;overflow:auto;padding-top:0}
+#setdlg .dlghead{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;background:var(--panel);padding:14px 0 8px;border-bottom:1px solid var(--line2)}
+#setdlg .dlghead h2{margin:0}
+#setdlg .dlghead .grow{flex:1}
+#setdlg .help{display:block}
+#setdlg #g-done .sub{border-top:0;padding-top:0}
+#setdlg .row{gap:12px}
+button.gear{font-size:17px;line-height:1;width:32px;height:30px;padding:0}
+.tile .skipped{position:absolute;left:6px;top:6px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;background:#d70015;color:#fff}
+.tile .skipped:empty{display:none}

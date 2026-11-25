@@ -44,6 +44,11 @@ class _Shim(types.ModuleType):
             super().__setattr__(name, value)
 
 
+# The older checks were written when Archive mode started off: they keep starting that way.
+# (archive_default_test.py checks the real defaults.)
+_real_defaults = settings.default_settings
+app.default_settings = lambda: {**_real_defaults(), "archive": False, "archive_default": False}
+
 sys.modules[__name__].__class__ = _Shim
 
 if __name__ == "__main__":

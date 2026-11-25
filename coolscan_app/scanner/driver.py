@@ -3,7 +3,14 @@
 import re
 from pathlib import Path
 
-DRIVER_LOG = Path.home() / ".coolscan-driver.log"   # the driver's own notes on each pass, started fresh each run
+from ..applog import current as _applog
+
+# The driver's own notes, in a logs folder next to coolscan.py (kept out of git). Each start of the
+# app keeps the last run's log as driver.prev.log, so a stall can still be read after a restart.
+# Every command sent to the scanner is noted, so a pass that stops shows where.
+LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+DRIVER_LOG = LOG_DIR / "driver.log"
+DRIVER_LEVEL = "warn,nkscan=debug,nkscan::transport=trace"
 
 
 #
@@ -16,16 +23,40 @@ class DriverLog:
     def __init__(self):
         self.path, self.at = None, 0
 
-    def start(self):
-        """Ask nkscan to write its notes on each pass into a small file. Quietly does nothing if it cannot."""
+    def start(self, path=None):
+        """Ask nkscan to write its notes on each pass into a small file. Quietly does nothing if it cannot.
+
+        With `path` (the app log's file for this run, logs/driver-<date>_<time>.log) every run keeps its
+        own file, and old ones go with the app log's history setting. Without it: logs/driver.log, the
+        last run's kept as driver.prev.log."""
         try:
             import nkscan
+            if path is not None:
+                path = Path(path)
+                path.parent.mkdir(exist_ok=True)
+                path.write_text("")
+                nkscan.init_logging(DRIVER_LEVEL, str(path))
+                self.path = path
+                return True
+            LOG_DIR.mkdir(exist_ok=True)
+            if DRIVER_LOG.exists() and DRIVER_LOG.stat().st_size:
+                DRIVER_LOG.replace(LOG_DIR / "driver.prev.log")
             DRIVER_LOG.write_text("")
-            nkscan.init_logging("warn,nkscan::session::scan=debug", str(DRIVER_LOG))
+            nkscan.init_logging(DRIVER_LEVEL, str(DRIVER_LOG))
             self.path = DRIVER_LOG
         except Exception:  # noqa: BLE001 - the log is an extra; scanning works without it
             self.path = None
         return self.path is not None
+
+    def note(self, line):
+        """Put one of the app's own lines in the same file, so the two read as one story."""
+        if not self.path:
+            return
+        try:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write("APP " + line + "\n")
+        except OSError:
+            pass
 
     def mark(self):
         try:
@@ -43,8 +74,13 @@ class DriverLog:
                 text = f.read().decode("utf-8", "replace")
         except OSError:
             return []
-        return [{k: int(v) for k, v in re.findall(r"\b(\w+_ms|bytes|chunks)=(\d+)", line)}
-                for line in text.splitlines() if "starved_ms=" in line]
+        found = [{k: int(v) for k, v in re.findall(r"\b(\w+_ms|bytes|chunks)=(\d+)", line)}
+                 for line in text.splitlines() if "starved_ms=" in line]
+        log = _applog()
+        for p in found:  # each pass's figures go in the app log too
+            if log is not None:
+                log.write("info", "pass", "pass done", **p)
+        return found
 
 
 def clock(seconds):
@@ -107,7 +143,17 @@ _ADVICE = (
 
 
 def explain(e):
-    """A failure in plain words with what to do, then the driver's own wording in brackets."""
+    """A failure in plain words with what to do, then the driver's own wording in brackets.
+
+    Every failure explained here also goes in the app log, with the scanner's own code and its meaning."""
+    words = _explain(e)
+    log = _applog()
+    if log is not None and not _stopped(e):
+        log.error(e, advice=words)
+    return words
+
+
+def _explain(e):
     kind, text = type(e).__name__, str(e)
     low = text.lower()
     if isinstance(e, OSError):

@@ -89,8 +89,8 @@ calls = counted(app)
 app.scan([0])
 roll = next(out.glob("Roll*"))
 check("archive + 2 passes: 2 passes, none cleaned by the driver", len(calls) == 2 and not any(c.get("clean") for c in calls))
-check("archive + 2 passes: RAW, IR and Positive written",
-      sorted(p.name for p in roll.rglob("*.tif")) == ["Scan_001_R001.tif", "Scan_001_R001.tif", "Scan_001_R001_IR.tif"],
+check("archive + 2 passes: RAW and Positive written (no separate _IR.tif any more)",
+      sorted(p.name for p in roll.rglob("*.tif")) == ["Scan_001_R001.tif", "Scan_001_R001.tif"],
       str(sorted(str(p.relative_to(roll)) for p in roll.rglob("*.tif"))))
 check("archive + 2 passes: dust removal ran on the average", bool(logged(app, "rebuilt")), "; ".join(logged(app, "rebuilt")))
 
@@ -144,7 +144,7 @@ if os.environ.get("FAKE_OSA") == "denied":
     sys.stderr.write("Error: The shortcut could not be found.\\n"); sys.exit(1)
 """)
 (fake_bin / "shortcuts").chmod(0o755)
-app, out = fresh(notify_mac=True, notify_shortcut="Tell my phone")
+app, out = fresh(notify_on=True, notify_mac=True, notify_shortcut="Tell my phone")
 check("nothing switched on: nothing sent", cs.App(demo=True).notify("x", wait=True) is False)
 record.write_text("")
 app.notify("Strip done: 6 of 6 frames saved in Roll 001.", wait=True)
@@ -158,7 +158,7 @@ check("log says what was sent", len(logged(app, "sent:")) == 2, "; ".join(logged
 check("the page can list the shortcuts", cs.list_shortcuts() == ["Another one", "Tell my phone"], str(cs.list_shortcuts()))
 check("no iMessage left in the app", not any("imessage" in p.read_text().lower() for p in cs.PACKAGE.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".html")))
 os.environ["FAKE_OSA"] = "denied"
-app = cs.App(demo=True); app.settings.update(notify_shortcut="Gone", notify_mac=True)
+app = cs.App(demo=True); app.settings.update(notify_on=True, notify_shortcut="Gone", notify_mac=True)
 app.notify("hello", wait=True)
 check("a refusal is reported with macOS's own words, and nothing breaks", len(logged(app, "could not send")) == 2,
       "; ".join(logged(app, "could not send")))
@@ -172,7 +172,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
 srv = HTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
 os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
-app, out = fresh(notify_ntfy=f"http://127.0.0.1:{srv.server_port}/my-topic", clean=False)
+app, out = fresh(notify_on=True, notify_ntfy=f"http://127.0.0.1:{srv.server_port}/my-topic", clean=False)
 app.new_roll({"film_brand": "Kodak", "film_stock": "Portra", "film_iso": "400", "film_notes": "Anna's wedding"})
 app.scan([0, 1])
 for _ in range(50):
@@ -200,7 +200,7 @@ for _ in range(50):
 check("a batch that stops on an error sends a message too", len(got) == 1 and "stopped after 0 of 2" in got[0][2], str(got))
 
 os.environ["PATH"] = "/nonexistent"
-app = cs.App(demo=True); app.settings.update(notify_mac=True)
+app = cs.App(demo=True); app.settings.update(notify_on=True, notify_mac=True)
 app.notify("hello", wait=True)
 check("no osascript (not a Mac): said plainly, no crash", bool(logged(app, "needs a Mac")), "; ".join(logged(app, "could not")))
 os.environ["PATH"] = old_path
@@ -249,13 +249,13 @@ check("set-up: three rolls, the current one is 003", app.settings["roll"] == "Ro
 r = app.quick_job("renumbering", lambda: app.renumber_roll(1))
 check("Roll 001 taken: asks first, lists what is in the way with file counts",
       r.get("ok") is False and [d["name"] for d in r["in_the_way"]] == ["Roll 001", "Roll 002 - Old Test"]
-      and r["in_the_way"][0]["files"] == 8, json.dumps(r))   # 6 pictures, the scan log, the film colour notes
+      and r["in_the_way"][0]["files"] == 6, json.dumps(r))   # 4 pictures, the scan log, the film colour notes
 check("...and nothing was changed", tree(out) == before and app.settings["roll"].startswith("Roll 003"))
 r = app.quick_job("renumbering", lambda: app.renumber_roll(1, move_aside=True))
 after = tree(out)
 check("after the yes: this roll is Roll 001", r.get("ok") and app.settings["roll"] == "Roll 001 - Kodak Portra ISO 400", json.dumps(r))
 check("its files now say _R001", sorted(p.name for p in (out / app.settings["roll"]).rglob("*.tif")) ==
-      ["Scan_001_R001.tif", "Scan_001_R001.tif", "Scan_001_R001_IR.tif", "Scan_002_R001.tif", "Scan_002_R001.tif", "Scan_002_R001_IR.tif"])
+      ["Scan_001_R001.tif", "Scan_001_R001.tif", "Scan_002_R001.tif", "Scan_002_R001.tif"])
 check("older rolls moved whole into 'Earlier rolls', names inside untouched",
       "Earlier rolls/Roll 001/RAW/Scan_001_R001.tif" in after and "Earlier rolls/Roll 002 - Old Test/Positive/Scan_001_R002.tif" in after)
 check("same number of files, every picture byte for byte the same", len(after) == len(before) and digests(out) == sums,

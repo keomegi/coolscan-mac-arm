@@ -5,6 +5,8 @@ const [port, shotDir] = process.argv.slice(2);
 (async () => {
   const b = await chromium.launch();
   const p = await (await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })).newPage();
+  // the Scan quality and Save as boxes start folded since 2026-11-23: open them, as they were when this script was written
+  await p.addInitScript(() => { try { if (!localStorage.getItem('coolscan.cards')) localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-save': true})); } catch (e) {} });
   const errs = []; p.on('pageerror', e => errs.push(String(e))); p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await p.goto('http://127.0.0.1:' + port + '/');
   await p.waitForFunction(() => document.querySelectorAll('.tile img').length >= 4, null, { timeout: 30000 });
@@ -15,6 +17,7 @@ const [port, shotDir] = process.argv.slice(2);
   out.before = { box: await box(), autoBtn: await p.isVisible('#b-autocrop'), setting: await p.isChecked('#s-auto_crop') };
   // 1 Crop on a frame without a crop: the box is there at once, over the whole frame, with its handles
   await p.click('#b-crop'); await p.waitForTimeout(500);
+  await p.$eval('#stage', e => e.scrollIntoView({ block: 'center' })); await p.waitForTimeout(200);   // the frame cards can push it below the window
   out.cropMode = { box: await box(), handles: await p.$$eval('#cropbox .h', h => h.filter(x => x.getBoundingClientRect().width > 0).length), words: await p.textContent('#vsaved') };
   await p.screenshot({ path: shotDir + '/crop-box-at-once.png', clip: await p.$eval('#stage', e => { const q = e.getBoundingClientRect(); return { x: q.left, y: q.top - 50, width: q.width, height: q.height + 90 }; }) });
   // drag its left side in: that makes the crop

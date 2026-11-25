@@ -14,6 +14,7 @@ const [port, shotDir] = process.argv.slice(2);
   await post('/api/crop', { frame: 1, rect: [0.2, 0.2, 0.6, 0.6] });
   await p.waitForFunction(() => !document.getElementById('cropbox').hidden, null, { timeout: 5000 });
   await p.waitForTimeout(800);
+  await p.$eval('#stage', e => e.scrollIntoView({ block: 'center' })); await p.waitForTimeout(200);   // the frame cards can push it below the window
   const big = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   const pt = (fx, fy) => [big.x + fx * big.w, big.y + fy * big.h];
   const drag = async (from, to) => { await p.mouse.move(...from); await p.mouse.down(); await p.mouse.move(...to, { steps: 6 }); await p.mouse.up(); await p.waitForTimeout(700); };

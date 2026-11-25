@@ -22,7 +22,7 @@ class RollsMixin:
         st = self.settings
         digits = min(6, max(1, int(st["digits"] or 3)))
         date, roll = self._name_parts()
-        return self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}" + "_" + roll
+        return self._prefix() + (date + "_" if date else "") + f"{n:0{digits}d}" + ("_" + roll if roll else "")
 
     @staticmethod
     def _clean_name(text):
@@ -70,18 +70,12 @@ class RollsMixin:
             typed = int(self.settings["start"] or 0)
         except (TypeError, ValueError):
             typed = 0
+        if typed > 0 and self.settings["overwrite"]:
+            return typed  # the person allowed overwriting; the page has asked them before the scan starts
         return self._next_number(self._name_folders(), typed if typed > 0 else self._highest_number() + 1)
 
-    def _name_parts(self):
-        """The scan date that goes before the picture number ("" when switched off) and the
-        number of the roll being scanned, which always goes after it."""
-        st = self.settings
-        # the day of the scan; one batch keeps one date even if it runs past midnight
-        date = (self.batch_day or time.strftime("%Y%m%d")) if st["name_date"] else ""
-        return date, f"R{self._roll_number(st['roll'] or '') or 1:03d}"
-
-    def _next_number(self, folders, n):
-        """n, or the first number after it whose name is still free in every one of the folders."""
+    def _taken_stems(self, folders):
+        """The names (without .tif, lower case) of the pictures already in the folders."""
         taken = set()
         for f in folders:
             try:
@@ -91,6 +85,37 @@ class RollsMixin:
                         taken.add(e.name[:end.start()].lower())  # the Mac's disk does not tell A from a
             except OSError:
                 pass
+        return taken
+
+    def would_overwrite(self, count):
+        """The names a scan of count frames would write over, [] when nothing would be.
+        Only a typed Next number with "Allow overwriting" on can do that."""
+        try:
+            typed = int(self.settings["start"] or 0)
+        except (TypeError, ValueError):
+            typed = 0
+        if typed <= 0 or not self.settings["overwrite"] or count <= 0:
+            return []
+        taken = self._taken_stems(self._name_folders())
+        stems = [self._stem(None, n) for n in range(typed, typed + count)]
+        return [s for s in stems if s.lower() in taken]
+
+    def _name_parts(self):
+        """The scan date that goes before the picture number ("" when switched off) and the
+        number of the roll being scanned, which always goes after it."""
+        st = self.settings
+        # the day of the scan; one batch keeps one date even if it runs past midnight
+        date = (self.batch_day or time.strftime("%Y%m%d")) if st["name_date"] else ""
+        if not st["use_roll"]:
+            return date, ""  # no roll: no roll number in the name either
+        return date, f"R{self._roll_number(st['roll'] or '') or 1:03d}"
+
+    def _next_number(self, folders, n):
+        """n, or the first number after it whose name is still free in every one of the folders.
+        With "Allow overwriting" on and a typed Next number, n itself (the page asked first)."""
+        if self.settings["overwrite"] and int(self.settings["start"] or 0) > 0:
+            return n
+        taken = self._taken_stems(folders)
         while self._stem(folders, n).lower() in taken:
             n += 1
         return n
@@ -114,8 +139,11 @@ class RollsMixin:
         return int(m.group(1)) if m else 0
 
     def roll_dir(self):
-        """The current roll's folder. Strips keep going into it until New roll."""
+        """The current roll's folder. Strips keep going into it until New roll.
+        With roll folders switched off: the chosen folder itself."""
         st = self.settings
+        if not st["use_roll"]:
+            return self._base()
         if not st["roll"]:
             base = self._base()
             existing = sorted((d.name for d in base.glob("Roll *") if d.is_dir()),
@@ -311,6 +339,8 @@ class RollsMixin:
     def _write_description(self):
         """Make Description.txt in the roll folder say what the app has. True if the file was written."""
         st = self.settings
+        if not st["use_roll"]:
+            return False  # the description belongs to a roll; a plain folder gets none
         folder = self.roll_dir()
         path = folder / DESCRIPTION_FILE
         text = st["film_description"].strip()

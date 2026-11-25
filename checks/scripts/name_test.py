@@ -96,7 +96,7 @@ print("H settings saved by earlier versions")
 cs.SETTINGS_FILE.write_text(json.dumps({"start": 1, "defaults_version": 2, "basename": "Scan", "suffix": "x", "roll": "Roll 002 - x", "roll_tag": "date_day", "notify_imessage": "+15550100"}))
 a = cs.App(demo=True); a.load_settings()
 check("old settings: the default prefix 'Scan' is emptied, old switches are dropped", a.settings["basename"] == "" and a.settings["name_date"] is True and a.settings["start"] == 0
-      and a.settings["defaults_version"] == 5 and a.settings["roll"] == "Roll 002 - x" and a._stem(None, 5) == f"{D}_005_R002", a._stem(None, 5))
+      and a.settings["defaults_version"] == 6 and a.settings["roll"] == "Roll 002 - x" and a._stem(None, 5) == f"{D}_005_R002", a._stem(None, 5))
 check("...and nothing of them is written back", not {"suffix", "roll_tag", "notify_imessage"} & set(json.loads(cs.SETTINGS_FILE.read_text())))
 cs.SETTINGS_FILE.write_text(json.dumps({"start": 0, "defaults_version": 4, "basename": "Trip", "roll": "Roll 001 - x", "roll_tag": "day"}))
 a = cs.App(demo=True); a.load_settings()

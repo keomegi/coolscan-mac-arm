@@ -1,21 +1,32 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan</title>
-<link rel="stylesheet" href="/style.css"></head><body>
+<link rel="stylesheet" href="/style.css"></head><body class="main">
 <header id="bar">
 <div class="brand"><h1>Coolscan</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
+<label class="archtoggle" id="archtoggle" title="Archive mode: each frame is saved twice from one pass, as RAW (the untouched scan with its infrared) and as Positive (the finished picture)"><input type="checkbox" id="s-archive" role="switch"><span class="sw" aria-hidden="true"></span><span class="txt"><b>Archive mode</b><small id="archsub">RAW + Positive</small></span></label>
 <div class="tools" role="toolbar" aria-label="Scanner">
+<div class="quiet" role="group" aria-label="Scanner and film">
 <button id="b-connect" title="Connect to the scanner again">Connect</button>
 <button id="b-load" title="Take in a strip that is waiting at the slot">Load</button>
 <button id="b-eject" title="Eject the film">Eject</button>
+</div>
 <span class="gap"></span>
 <button id="b-thumb" title="One quick pass over the strip to find the frames (T)">Thumbnail</button>
 <button id="b-preview" title="A quick, sharper look than the thumbnail (P)">Preview</button>
 <button class="primary" id="b-scan" title="Scan and save (⌘ Return)">Scan all frames</button>
 <button id="b-stop" disabled title="Stop after the current step">Stop</button>
 <span class="gap"></span>
+<button class="icon gear" id="b-settings" title="Settings: messages, logs, crop learning, what happens when a strip is done (⌘,)" aria-label="Settings">⚙</button><a class="pagelink" href="/library" title="Browse the pictures you have scanned, roll by roll">Library</a>
 <a class="pagelink" href="/develop" title="Make the finished pictures again from RAW files, with other settings, without scanning">Re-develop RAW files</a>
 </div>
+<div id="setline" aria-label="Settings of the scan"><span class="lbl" id="setlbl">Next scan</span><span id="setchips"></span></div>
+<div id="actline">
 <div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span><span id="timing"></span></div>
+<span id="lastline" title="The latest line of the Activity list"></span>
+<button id="b-log" class="small" aria-expanded="false" aria-controls="activity" title="Show everything the app did (A)">Activity<span id="logwarn" class="warnbadge" hidden></span></button>
+</div>
+<section id="activity" aria-label="Activity" hidden><div class="head"><h2>Activity</h2><span class="hint" id="laststrip"></span></div>
+<div id="log" role="log" tabindex="0" aria-label="What the app did"></div></section>
 </header>
 <main>
 <aside id="side" aria-label="Settings">
@@ -26,11 +37,11 @@
 <div class="inline" id="presetnew" hidden><input type="text" id="presetname" maxlength="60" placeholder="Name, e.g. Portra archive" aria-label="Name for these settings"><button class="primary" id="b-presetsave">Save</button><button id="b-presetcancel">Cancel</button></div>
 <div class="inline" id="presetdel" hidden><span id="presetdelmsg"></span><button id="b-presetdelyes">Delete</button><button id="b-presetdelno">Cancel</button></div>
 <p class="hint" id="presetmsg" hidden></p>
-<p class="help">Keep the settings you use for one kind of work under a name, and switch between them here. Saving under a name that exists replaces it. A saved set holds how you scan and save: film type, resolution, dust removal, grain, focus and exposure choices, colour space, file name choices. It does not hold the folder, the roll, or who to tell. "Not saved" means the settings in use differ from every saved set.</p>
+<p class="help">Keeps the settings for one kind of work under a name. A set holds how you scan and save (film, resolution, dust removal, grain, focus and exposure, colour space, file names), not the folder, the roll or notifications. Saving under a name that exists replaces it. "Not saved" means the settings in use match no saved set.</p>
 </div></details>
 
 <details class="card" id="g-film" open><summary>Film<span class="sum" id="sum-film"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<label class="row"><span>Film type</span><select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative</option></select></label>
+<label class="row"><span>Film type</span><select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative (silver)</option><option value="chromo">B&amp;W chromogenic (C-41: Ilford XP2, Kodak BW400CN)</option></select></label>
 <label class="row" id="fmtrow"><span>Format</span><select id="s-format"><option value="">From holder</option></select></label>
 <label class="row"><span>Show negatives as positives</span><input type="checkbox" id="s-invert_preview"></label>
 <label class="row"><span>Turn every frame 180°</span><input type="checkbox" id="s-rotate180"></label>
@@ -43,44 +54,74 @@
 <div class="inline" id="profiledel" hidden><span id="profiledelmsg"></span><button id="b-profiledelyes">Delete</button><button id="b-profiledelno">Cancel</button></div>
 <p class="hint" id="profilemsg" hidden></p>
 </div>
-<p class="help">"Each frame on its own" works out the colour of a negative from that one frame, which goes wrong when the frame is mostly one colour (grass, a sunset, a blue sky). A film profile takes the colour from the film instead: the app measures every frame you scan, and "Save this roll's film…" turns the measurements of the roll you are in into a profile under the film's name. Pick it for later strips and rolls of the same film and every frame gets the same colour. Brightness is still set for each frame. Thumbnails always use "each frame on its own".</p>
+<p class="help"><i>Each frame on its own</i> works out a negative's colour from that frame alone, which can go wrong when a frame is mostly one colour (grass, sky, a sunset). A film profile uses the film's colour instead: every frame you scan is measured, and "Save this roll's film…" makes a profile from this roll. Pick it for later rolls of the same film. Brightness is still set per frame; thumbnails always use each frame on its own.</p>
+</div></details>
+
+<details class="card" id="g-preview" open><summary>Thumbnail &amp; preview<span class="sum" id="sum-preview"></span></summary><div class="body">
+<p class="hint">The two quick looks before you scan. Neither is saved.</p>
+<label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
+<p class="hint"><b>Thumbnail</b>: one fast, low-resolution pass over the whole strip that finds the frames and gives each its small picture. With the box ticked it runs by itself when a strip goes in.</p>
+<label class="row"><span>Preview scan dpi</span><select id="s-preview_dpi"></select></label>
+<p class="hint"><b>Preview</b>: a quick scan of one frame (or the ticked ones) at this resolution, sharper than the thumbnail, to judge focus, colour and crop. Once a frame is scanned, the big picture shows the scan itself.</p>
+</div></details>
+
+<details class="card" id="g-focus" open><summary>Focus &amp; exposure<span class="sum" id="sum-focus"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<label class="row"><span>Focus</span><select id="s-focus_mode"><option value="frame">Autofocus each frame</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
+<label class="row" id="posrow"><span>Lens position</span><input type="number" id="s-focus_position"></label>
+<label class="row"><span>Focus point</span><span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
+<label class="row"><span>Exposure</span><select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep from Auto exposure</option></select></label>
+<label class="row"><span>White balance</span><select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
+<div class="sub">Do now, on the frame you are looking at</div>
+<div class="act"><button id="b-af" title="Focus the scanner on this frame now">Autofocus</button><span class="hint">Focuses this frame now. The settings above stay as they are.</span></div>
+<div class="act"><button id="b-ae" title="Measure the exposure on this frame now">Auto exposure</button><span class="hint">Measures this frame now. It is used for every frame only while Exposure is "Keep from Auto exposure".</span></div>
+<div class="act"><button id="b-cal" title="Autofocus and measure the exposure on this frame, then keep both for every frame">Calibrate</button><span class="hint">Both, then <b>changes the settings above</b> to "Same focus for all frames" and "Keep from Auto exposure".</span></div>
+<div class="act"><button id="b-unlock" title="Back to focusing and exposing each frame on its own">Reset</button><span class="hint">Puts Focus and Exposure above back to each frame on its own.</span></div>
+<p class="hint warn" id="overnote" hidden></p>
+<p class="hint" id="calinfo"></p>
+<p class="help">The settings are used for every preview and scan. The buttons under "Do now" act once, on the frame shown in the big picture; only Calibrate and Reset change the settings, and Reset lights up while Focus or Exposure is kept from one frame. <b>Pick</b>: click the big picture to choose where the scanner focuses.</p>
+<p class="help"><b>When it focuses</b> (never on the thumbnail pass). <i>Autofocus each frame</i> (default): on a frame's first preview or scan; later passes of that frame reuse it until a new strip, Eject, Reset or a new focus point. <i>Autofocus on every pass</i>: before each pass. <i>Same focus for all frames</i>: the last Autofocus or Calibrate. <i>Manual</i>: never. A cropped scan is focused on the whole frame. The Activity list notes each time it really focuses.</p>
 </div></details>
 
 <details class="card" id="g-roll" open><summary>Roll<span class="sum" id="sum-roll"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<select id="rollpick" class="wide" aria-label="Roll" title="The roll you are scanning. Pick another one to carry on in it."></select>
+<div class="inline"><select id="rollpick" class="grow" aria-label="Roll" title="The roll you are scanning. Pick another one to carry on in it."></select><button id="b-newroll">New roll…</button></div>
 <p class="hint" id="rollfilm"></p><p class="hint warn" id="rollpickmsg" hidden></p>
 <label class="row"><span>Roll number</span><span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
 <div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
 <div class="btnrow"><button id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div></div>
 <label for="rolldesc">Film description</label>
 <textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
-<div class="btnrow"><button id="b-newroll">New roll…</button></div>
-<p class="help">Scans go into one folder per roll, and every strip of the roll adds to it with continuing numbers. The list holds every roll in the target folder: pick one to carry on in it. The description is saved as Description.txt in the roll's folder whenever you change it. Changing the roll number renames the folder and the R… part of its files; nothing is deleted.</p>
+<p class="help">One folder per roll; each strip adds to it, numbering on. Pick a roll in the list to carry on in it. The description is saved as Description.txt in the roll folder. Changing the roll number renames the folder and the R… part of its file names; nothing is deleted.</p>
 </div></details>
 
-<details class="card" id="g-scan" open><summary>Scan quality<span class="sum" id="sum-scan"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<details class="card" id="g-scan"><summary>Scan quality<span class="sum" id="sum-scan"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <label class="row"><span>Resolution (dpi)</span><select id="s-dpi"></select></label>
 <label class="row"><span>Multi-sample</span><select id="s-samples"></select></label>
 <p class="hint" id="mshint" hidden></p>
 <label class="row"><span>Multi-Exposure</span><select id="s-multi_exposure"><option value="0">Off</option><option value="2">2x longer</option><option value="4">4x longer</option></select></label>
 <p class="hint" id="mehint" hidden></p>
-<label class="row"><span>Dust &amp; scratch removal</span><input type="checkbox" id="s-clean"></label>
+<label class="row" id="cleanrow"><span>Dust &amp; scratch removal</span><input type="checkbox" id="s-clean"></label>
+<p class="hint" id="monohint" hidden>No dust removal on ordinary B&amp;W film: its silver blocks infrared just like dust does. Chromogenic B&amp;W film (C-41, such as Ilford XP2 or Kodak BW400CN) is made of dyes and can be cleaned: choose it as the film type.</p>
+<p class="hint" id="kchint" hidden>Dust removal is switched off when you choose Kodachrome: its cyan dye blocks infrared much as dust does, so the cleaner can paint over parts of the picture. You can tick it again to try it; check the result closely.</p>
 <label class="row" id="dustrow"><span>Dust removal by</span><select id="s-dust_method"><option value="builtin">Built in</option><option value="ice">Nikon ICE (helper)</option><option value="pass">Driver (older method)</option></select></label>
 <label class="row"><span>Grain reduction</span><select id="s-grain"><option value="0">Off</option><option value="1">1 (light)</option><option value="2">2</option><option value="3">3</option><option value="4">4 (strong)</option></select></label>
 <label class="row"><span>Restore faded colours</span><select id="s-restore"><option value="0">Off</option><option value="1">Low</option><option value="2">Medium</option><option value="3">High</option></select></label>
-<p class="help">Dust removal finds dust and scratches in the infrared picture. Built in leaves clean film exactly as scanned, gives light dirt its light back and fills heavy dirt from the film around it. Driver is the older method, which changes more of the picture; in Archive mode it needs a second pass. Multi-sample gives cleaner shadows and takes that many times longer on this scanner. Multi-Exposure scans each frame a second time with a longer exposure and reads the dense parts of the film from that pass: the shadows of a slide, the highlights of a negative. It helps slides most; on negatives the gain is small. Each frame takes at least twice as long. Grain reduction and colour restoration are the app's own stand-ins for Nikon's GEM and ROC, and are off unless you choose a level.</p>
+<p class="help"><b>Dust removal</b> finds dust and scratches in the infrared picture. <i>Built in</i> changes only the dirty spots; <i>Driver</i> is the older method and changes more of the picture (and needs a second pass in Archive mode). <b>Multi-sample</b>: cleaner shadows, that many times slower. <b>Multi-Exposure</b>: a second, longer pass for the dense parts of the film; helps slides most and at least doubles the time. <b>Grain reduction</b> and <b>Restore faded colours</b> are the app's versions of Nikon's GEM and ROC, off unless you pick a level.</p>
 </div></details>
 
-<details class="card" id="g-save" open><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<label class="row"><span>Archive mode (RAW + Positive)</span><input type="checkbox" id="s-archive"></label>
+<details class="card" id="g-save"><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
+<p class="hint" id="archnote">Archive mode is switched at the top of the window.</p>
 <label class="row" id="cropscanrow"><span>Scan only the cropped part</span><input type="checkbox" id="s-crop_scan"></label>
 <label class="row"><span>Crop each frame automatically</span><input type="checkbox" id="s-auto_crop"></label>
-<label class="row" id="negrow"><span>Negatives saved as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
+<label class="row"><span>Auto crop cuts further in by</span><select id="s-auto_crop_trim"><option value="0">Nothing</option><option value="0.01">1%</option><option value="0.02">2%</option><option value="0.03">3%</option></select></label>
+<label class="row"><span>Auto crop cuts</span><select id="s-auto_crop_sides"><option value="all">All four sides</option><option value="ends">Left and right only</option></select></label>
+<label class="row" id="negrow"><span>Negatives as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
-<label class="row"><span>Also save the infrared picture</span><input type="checkbox" id="s-ir"></label>
-<label class="row"><span>Folder</span><input type="text" id="s-outdir"></label>
-<p class="help" id="archint">Archive mode saves two folders from one pass: RAW (the untouched scan with the infrared as a 4th channel) and Positive (the finished picture, dust removed if ticked). With "Scan only the cropped part" a cropped frame is scanned as just that part, which is quicker because less film is stepped over and less data crosses the scanner's slow USB link; unticked, the whole frame is scanned and the crop is cut out when the file is saved. Archive mode always scans the whole frame so its RAW file keeps it. The infrared picture is an extra file ending in _IR.tif that shows only the dust and scratches; dust removal works the same with it unticked. All files are 16-bit TIFF.</p>
+<label for="s-outdir" class="above">Folder</label><div class="inline"><input type="text" id="s-outdir" class="grow" spellcheck="false"><button id="b-choosefolder" title="Pick the folder in a Finder window">Choose…</button></div>
+<p class="hint warn" id="foldermsg" hidden></p>
+<label class="row"><span>Make a folder for each roll</span><input type="checkbox" id="s-use_roll"></label>
+<p class="hint" id="savewhere"></p>
+<p class="help" id="archint"><b>Archive mode</b> (switch at the top) saves two folders from one pass: RAW (the untouched scan, infrared as a 4th channel) and Positive (the finished picture). It always scans the whole frame. It is on when the app starts; to change that, see Additional settings. <b>Scan only the cropped part</b>: a cropped frame scans faster because only the crop is read; unticked, the whole frame is scanned and cut when saved. All files are 16-bit TIFF. <b>Make a folder for each roll</b>: on, each roll gets its own "Roll 005 - film" folder inside the folder, and names end in the roll number (_R005); off, the pictures go straight into the folder, with no roll folder and no roll number in the name, and the Roll card is hidden.</p>
 </div></details>
 
 <details class="card" id="g-names"><summary>File names<span class="sum" id="sum-names"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
@@ -89,68 +130,41 @@
 <label class="row"><span>Scan date in name</span><input type="checkbox" id="s-name_date"></label>
 <label class="row"><span>Counter digits</span><input type="number" id="s-digits" min="1" max="6"></label>
 <label class="row"><span>Next number</span><input type="number" id="s-start" min="1"></label>
+<label class="row"><span>Allow overwriting</span><input type="checkbox" id="s-overwrite"></label>
 <label class="row"><span>Photo taken</span><input type="text" id="s-photo_date" placeholder="e.g. 2005 or 2005-06-14"></label>
-<p class="help">Names are built as prefix, scan date, picture number, then the number of the roll you are scanning, which is always there. The next number counts on by itself from the pictures already in the roll; type another number to carry on from there once. A name that is taken is skipped, never overwritten. "Photo taken" sets the date galleries sort by: with only a year the files get today's day and time in that year.</p>
+<p class="help">A name is: prefix, scan date, picture number, roll number (only with a folder for each roll). The number counts on from the pictures already there; type one to start from it once. A name in use is skipped, never overwritten, unless you tick "Allow overwriting": then a typed number is used as it is, and Scan first shows which pictures would be replaced and waits for you to confirm. "Photo taken" sets the date photo apps sort by; with only a year, today's day and time in that year are used.</p>
 </div></details>
 
-<details class="card" id="g-focus"><summary>Focus &amp; exposure<span class="sum" id="sum-focus"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<div class="sub">Do once, now</div>
-<div class="btnrow"><button id="b-cal" title="Autofocus and measure the exposure on this frame, then keep both for every frame">Calibrate</button><button id="b-af">Autofocus</button><button id="b-ae">Auto exposure</button><button id="b-unlock" title="Back to focusing and exposing each frame on its own">Reset</button></div>
-<p class="hint" id="calinfo"></p>
-<div class="sub">Settings, used for every preview and scan</div>
-<label class="row"><span>Focus</span><select id="s-focus_mode"><option value="frame">Autofocus each frame once</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
-<label class="row" id="posrow"><span>Lens position</span><input type="number" id="s-focus_position"></label>
-<label class="row"><span>Focus point</span><span><span id="fpoint">centre</span> <button id="b-fpoint">Pick</button></span></label>
-<label class="row"><span>Exposure</span><select id="s-exposure_mode"><option value="auto">Auto exposure every frame</option><option value="same">Keep exposure from Auto exposure</option></select></label>
-<label class="row"><span>White balance</span><select id="s-white_balance"><option value="film">Film default</option><option value="unlock">Per channel (removes cast)</option><option value="lock">Locked (keeps cast)</option></select></label>
-<p class="help">The buttons act once, right away, on the frame you are looking at. Calibrate focuses and measures the exposure, then switches the two settings below to keep both for every frame; Reset undoes that. "Pick" lets you click the big picture to choose where the scanner focuses.</p>
-<p class="help"><b>When the scanner focuses.</b> Never during the thumbnail pass. With <i>Autofocus each frame once</i> (the default) it focuses each frame the first time that frame is previewed or scanned, and every later pass of that frame (the scan, multi-sample, Multi-Exposure) reuses that lens position. Frames are focused again after a new strip, Eject, Reset, or a new focus point. <i>Same focus for all frames</i> uses the last Autofocus or Calibrate for every frame. <i>Autofocus on every pass</i> focuses before each pass. <i>Manual</i> never focuses. The Autofocus button focuses only the frame you are looking at; Calibrate also switches to the same focus for all frames. A cropped scan is focused on the whole frame (at the focus point, or its centre), then only the crop is scanned. The Activity list says each time the scanner really focuses.</p>
-</div></details>
-
-<details class="card" id="g-preview"><summary>Thumbnail &amp; preview<span class="sum" id="sum-preview"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
-<label class="row"><span>Preview scan dpi</span><select id="s-preview_dpi"></select></label>
-<p class="help">The thumbnail is one quick pass over the strip that finds the frames; each frame's piece of it is what you see first. A preview is a quick scan of a frame that looks sharper. Neither is saved. Once a frame is scanned, the picture you see is the scan itself.</p>
-</div></details>
-
-<details class="card" id="g-done"><summary>When a strip is done<span class="sum" id="sum-done"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
-<label class="row"><span>Stop at the first frame that fails</span><input type="checkbox" id="s-stop_on_errors"></label>
-<label class="row"><span>Write a scan log</span><input type="checkbox" id="s-scan_log"></label>
-<div id="notifyopts" hidden>
-<div class="sub">Tell me</div>
-<label class="row"><span>Banner on this Mac</span><input type="checkbox" id="s-notify_mac"></label>
-<label class="row"><span>Run a shortcut</span><input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
-<label class="row"><span>ntfy topic</span><input type="text" id="s-notify_ntfy" placeholder="optional"></label>
-<div class="btnrow"><button id="b-notifytest">Send a test</button></div>
-</div>
-<p class="help">If a frame fails (for example autofocus), the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder. <span id="notifyhelp" hidden>"Run a shortcut" runs one of your own shortcuts from the Shortcuts app and hands it the message as text, so the shortcut decides how it reaches you. ntfy is a free phone app that needs no shortcut.</span></p>
-</div></details>
 </aside>
 
 <div id="work">
 <section id="frames" aria-label="Frames">
 <div class="head"><h2>Frames</h2><span class="hint" id="framesum"></span><span class="grow"></span>
+<label class="check" title="Move the start and end of each frame onto the gaps between pictures that the thumbnail shows. Frames with no clear gap stay where the scanner put them."><input type="checkbox" id="s-frame_fit"> Fit frames to the gaps</label>
 <button id="b-all" title="Tick every frame (⌘A)">Select all</button><button id="b-none" title="Untick every frame (Esc)">Select none</button></div>
 <div id="tiles" role="listbox" aria-label="Frames on this strip" aria-multiselectable="true"></div>
 <p class="hint" id="noframes">No frames yet. Feed a strip in and the app finds them, or press Thumbnail.</p>
-<details id="stripbox"><summary>Whole strip, as the thumbnail pass saw it</summary><div id="thumbwrap"><div class="inner"><img id="thumb" alt="The whole strip"></div></div></details>
 </section>
 
 <section id="viewer" aria-label="Preview">
-<div class="head"><h2 id="vtitle">Preview</h2><span class="chip" id="vsrc" hidden></span><span class="hint" id="vinfo"></span><span class="grow"></span>
+<div class="head"><h2 id="vtitle">Preview</h2><span class="chip" id="vsrc" hidden></span><button class="chip own" id="vown" hidden title="This frame has settings of its own. Click to see or change them.">Own settings</button><span class="hint" id="vinfo"></span><span class="grow"></span>
 <button id="b-sharper" title="A quick preview scan of this frame, sharper than the thumbnail">Preview scan</button>
 <button class="icon" id="b-rl" title="Turn 90° left ( [ )" aria-label="Turn left">⟲</button><button class="icon" id="b-rr" title="Turn 90° right ( ] )" aria-label="Turn right">⟳</button>
 <button id="b-crop" aria-pressed="false" title="Show the crop box and drag its sides or corners to choose the part that is saved (C)">Crop</button><button id="b-autocrop" title="Find the picture in the frame and crop to it, leaving out the film's edges, the holder and the gap between frames">Auto crop</button><button id="b-cropclear" hidden>Clear crop</button>
 <button id="b-zoom" title="Enlarge (Space, or double-click the picture)">Enlarge</button></div>
+<div id="framepos" hidden><span class="lbl">Where this frame sits on the strip:</span>
+<button class="icon" id="b-nudgel" title="Move this frame's window a little to the left on the strip (1% of the frame)" aria-label="Move left">◀</button><button class="icon" id="b-nudger" title="Move this frame's window a little to the right on the strip (1% of the frame)" aria-label="Move right">▶</button>
+<span class="hint" id="posinfo"></span><button class="small" id="b-nudge0" hidden title="Put the frame back where it was found">Reset</button></div>
+<div id="croptools" hidden><label for="cropratio">Shape</label><select id="cropratio" title="Keep the crop to this shape while you drag (hold Shift to keep the shape it has now)">
+<option value="free">Free</option><option value="frame">Same as the frame</option><option value="1.5">3:2</option><option value="1.3333">4:3</option><option value="1.25">5:4</option><option value="1">Square</option><option value="1.7778">16:9</option></select>
+<button class="icon" id="b-cropswap" title="Turn the crop between wide and tall" aria-label="Turn the crop between wide and tall">⇄</button>
+<span class="hint" id="cropsize"></span></div>
 <div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden title="Drag a side or corner to change the crop, or the middle to move it"><i class="h n" data-h="n"></i><i class="h s" data-h="s"></i><i class="h e" data-h="e"></i><i class="h w" data-h="w"></i><i class="h nw" data-h="nw"></i><i class="h ne" data-h="ne"></i><i class="h sw" data-h="sw"></i><i class="h se" data-h="se"></i></div><div class="mark" id="fmark" hidden></div></div>
 <p class="hint" id="vempty">Click a frame above to see it here.</p></div>
 <p class="hint" id="vsaved" hidden></p>
-<p class="hint" id="keyhint">Keys: ← → look at the next frame · X tick it for scanning · Space enlarge · C crop · [ ] turn · ⌘A tick all · ⌘Return scan</p>
+<div id="viewfoot"><button class="small" id="b-framesets" title="Give the frame you are looking at settings of its own (S)">Settings for this frame…</button><span class="grow"></span><button class="small" id="b-keys" title="Keyboard shortcuts (?)">Keyboard shortcuts</button></div>
 </section>
 
-<section id="activity" aria-label="Activity"><div class="head"><h2>Activity</h2><span class="hint" id="laststrip"></span></div>
-<div id="log" role="log" tabindex="0" aria-label="What the app did"></div></section>
 </div>
 </main>
 
@@ -164,6 +178,84 @@
 <textarea id="r-film_description" placeholder="Optional. Saved as Description.txt in the new roll's folder."></textarea>
 <p class="hint warn" id="rolldlgmsg" hidden></p>
 <div class="btnrow"><button id="b-rollcancel">Cancel</button><button class="primary" id="b-rollok">Start new roll</button></div>
+</dialog>
+<dialog id="overwritedlg" aria-labelledby="overwritetitle"><h2 id="overwritetitle">Replace pictures that are already there?</h2>
+<p class="hint warn" id="overwritemsg"></p>
+<ul id="overwritelist" class="overwritelist"></ul>
+<p class="hint">The old files are replaced and cannot be brought back. "Use free numbers" scans with the next numbers nobody uses instead.</p>
+<div class="btnrow"><button id="b-overcancel">Cancel</button><button id="b-overskip">Use free numbers</button><button class="danger" id="b-overok">Replace them</button></div>
+</dialog>
+<dialog id="keysdlg" aria-labelledby="keystitle"><h2 id="keystitle">Keyboard shortcuts</h2>
+<table class="keys">
+<tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Look at another frame</td></tr>
+<tr><td><kbd>Tab</kbd></td><td>Move between the frames and the buttons; the frames are one stop, the arrows move inside them</td></tr>
+<tr><td><kbd>X</kbd></td><td>Tick or untick the frame for scanning</td></tr>
+<tr><td><kbd>⌘</kbd> click, <kbd>Shift</kbd> click</td><td>Tick one frame, or a run of frames</td></tr>
+<tr><td><kbd>⌘A</kbd> / <kbd>Esc</kbd></td><td>Tick every frame / untick them all</td></tr>
+<tr><td><kbd>Space</kbd></td><td>Enlarge the picture (Space again closes it)</td></tr>
+<tr><td><kbd>C</kbd></td><td>Crop; hold <kbd>Shift</kbd> while dragging to keep the crop's shape</td></tr>
+<tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>Turn 90° left / right</td></tr>
+<tr><td><kbd>T</kbd> / <kbd>P</kbd></td><td>Thumbnail / Preview</td></tr>
+<tr><td><kbd>⌘ Return</kbd></td><td>Scan</td></tr>
+<tr><td><kbd>S</kbd></td><td>Settings for the frame you are looking at</td></tr>
+<tr><td><kbd>A</kbd></td><td>Show or hide the Activity list</td></tr>
+<tr><td><kbd>?</kbd></td><td>This list</td></tr>
+</table>
+<div class="btnrow"><button class="primary" id="b-keysok">Done</button></div>
+</dialog>
+<dialog id="framedlg" aria-labelledby="framedlgtitle"><h2 id="framedlgtitle">Settings for this frame</h2>
+<p class="hint">Pick a value to scan this frame with it. "Same as all frames" follows the settings on the left, so a change there still reaches this frame.</p>
+<div id="fsrows"></div>
+<label class="check" id="fs-alsorow" hidden><input type="checkbox" id="fs-also"> <span id="fs-alsotext">Also for the other ticked frames</span></label>
+<div class="btnrow"><button id="fs-reset">Same as all frames again</button><button class="primary" id="fs-done">Done</button></div>
+</dialog>
+<dialog id="setdlg" aria-labelledby="setdlgtitle"><div class="dlghead"><h2 id="setdlgtitle">Settings</h2><span class="grow"></span><button class="primary" id="b-setdone">Done</button></div>
+<p class="hint">Things you set once and rarely change. The settings for scanning are in the column on the left.</p>
+<span id="sum-done" hidden></span><span id="sum-extra" hidden></span>
+<div id="g-pvquick"><div class="sub">Preview scan</div>
+<label class="row"><span>Autofocus each frame for its preview</span><input type="checkbox" id="s-preview_af"></label>
+<label class="row"><span>Meter the exposure of each preview</span><input type="checkbox" id="s-preview_ae"></label>
+<p class="help">Unticked makes a preview quicker: autofocus takes about 7 to 18 seconds a frame on your LS-40, metering a few more. Without autofocus the lens stays where it was, so the preview can look soft; the scan still focuses the frame as set on the left. Without metering the preview reuses the exposure of the last preview, so a much darker or lighter frame can look wrong. A frame previewed this way gets a red <b>AF off</b> or <b>AE off</b> mark, like in Nikon Scan. The scan itself is not changed by these.</p></div>
+<div id="g-done"><div class="sub">When a strip is done</div>
+<label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
+<label class="row"><span>Stop at the first frame that fails</span><input type="checkbox" id="s-stop_on_errors"></label>
+<label class="row"><span>Write a scan log</span><input type="checkbox" id="s-scan_log"></label>
+<p class="help">If a frame fails, the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder.</p>
+</div>
+<div id="g-extra">
+<div class="sub">Archive mode</div>
+<label class="row"><span>Start in Archive mode</span><input type="checkbox" id="s-archive_default"></label>
+<p class="hint">Ticked: the app always starts with Archive mode on. Unticked: it starts the way you left the switch at the top.</p>
+<div class="sub">Auto crop learning</div>
+<label class="row"><span>Auto crop learns from my crops</span><input type="checkbox" id="s-auto_crop_learn"></label>
+<p class="hint">Ticked: every crop you draw by hand, here or in the Library, is kept to learn from (whether or not "Crop each frame automatically" is on), it learns again by itself after every 10 new crops, and Auto crop crops the way you do once that is closer to your crops than the built-in rule. Unticked: nothing is kept or learned and Auto crop uses the built-in rule only.</p>
+<div class="btnrow"><button id="b-croplearn" title="Learn now from all the crops kept so far and from the crops in the Library">Learn from my crops</button><button id="b-croplearnreport" aria-expanded="false">Learning report</button></div>
+<p class="hint" id="croplearnmsg"></p>
+<div id="croplearnreport" hidden></div>
+<div class="sub">Messages when a strip is done</div>
+<p class="hint" id="notifymissing" hidden>Not installed. Messages come from an optional file, <code>notify.py</code>, that is kept out of git. To use them, put it in the <code>coolscan_app/extras</code> folder of the app (Claude can put it there for you), then start the app again.</p>
+<div id="notifyopts" hidden>
+<label class="row"><span>Send a message when a strip is done</span><input type="checkbox" id="s-notify_on"></label>
+<div id="notifyways">
+<p class="hint">Pick one or more ways, then press Send a test.</p>
+<label class="row"><span>Banner on this Mac</span><input type="checkbox" id="s-notify_mac"></label>
+<label class="row"><span>Run a shortcut</span><input type="text" id="s-notify_shortcut" list="shortcutlist" placeholder="its name in Shortcuts"></label><datalist id="shortcutlist"></datalist>
+<label class="row"><span>ntfy topic</span><input type="text" id="s-notify_ntfy" placeholder="e.g. coolscan-7f3k2"></label>
+<div class="btnrow"><button id="b-notifytest">Send a test</button></div>
+<p class="hint"><b>How to set each one up</b></p>
+<ul class="how">
+<li><b>Banner on this Mac</b>: tick it and press Send a test. If no banner shows, open System Settings › Notifications and allow notifications for Script Editor (macOS shows the app's banners under that name).</li>
+<li><b>Run a shortcut</b>: in the Shortcuts app, make a shortcut that receives text and does something with it, for example Send Message to your phone or Show Notification. Type its name here; the list suggests your shortcuts.</li>
+<li><b>ntfy</b>: install the free ntfy app on your phone and subscribe to a topic with a name nobody would guess. Type the same name here. The message goes through the public ntfy.sh server, so it leaves out your film notes.</li>
+</ul>
+</div></div>
+<div class="sub">Logs and cache</div>
+<label class="row"><span>Keep logs for (days)</span><input type="number" id="s-log_days" min="0" max="3650" step="1"></label>
+<p class="help">The app writes down everything it does, every error, and what the scanner reports, in the <code>logs</code> folder next to the app (one file a day, in JSON). Older files are deleted. 0 keeps them all.</p>
+<p class="hint" id="loginfo"></p>
+<div class="btnrow"><button id="b-openlogs">Show logs folder</button><button id="b-clearcache" title="Forget the kept strip, the re-develop pictures and Python's compiled files. Logs, settings and pictures stay.">Clear cache</button></div>
+<p class="hint" id="cachemsg" hidden></p>
+</div>
 </dialog>
 <dialog id="zoom" aria-label="Enlarged picture"><img id="zoomimg" alt=""><span id="zoomcap"></span></dialog>
 <script src="/app.js"></script></body></html>

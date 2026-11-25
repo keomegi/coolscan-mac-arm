@@ -4,6 +4,8 @@ const { chromium } = require('playwright');
   const [port, shots] = process.argv.slice(2);
   const b = await chromium.launch();
   const p = await b.newPage({ viewport: { width: 1300, height: 950 }, deviceScaleFactor: 1 });
+  // the Scan quality and Save as boxes start folded since 2026-11-23: open them, as they were when this script was written
+  await p.addInitScript(() => { try { if (!localStorage.getItem('coolscan.cards')) localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-save': true})); } catch (e) {} });
   const errs = []; p.on('pageerror', e => errs.push(String(e))); p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   await p.goto('http://127.0.0.1:' + port + '/');
   await p.waitForFunction(() => document.querySelectorAll('.tile img').length >= 6, null, { timeout: 30000 });

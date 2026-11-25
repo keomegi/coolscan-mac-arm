@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from .framesettings import FRAME_KEYS
+
 SETTINGS_FILE = Path.home() / ".coolscan.json"  # settings and the current roll, kept between runs
 
 
@@ -10,19 +12,31 @@ def default_settings():
     """What the app starts with the first time."""
     return {
         "film": "negative", "format": "", "preview_dpi": 290,
-        "dpi": 2900, "samples": 1, "ir": True, "clean": True,
+        "dpi": 2900, "samples": 1, "clean": True,
+        "ir": False,  # no separate _IR.tif any more (the option is gone); infrared is still read for dust removal
         "multi_exposure": 0,
         "crop_scan": True,
         "auto_crop": False,  # crop each frame to its picture (film edges, holder, gap left out) as it is shown  # a cropped frame: the scanner reads only the crop (not in Archive mode)  # 0 = off; 2 or 4 = a second pass exposed that many times longer, merged in
+        "auto_crop_trim": 0.0,   # Auto crop: cut this share of the frame further in on each side it cuts (0 to 0.03)
+        "auto_crop_sides": "all",   # "all", or "ends": only the two ends along the strip (left and right)
+        "auto_crop_learn": True,  # auto crop learns from crops drawn by hand, and crops like them (Additional settings)
+        "frame_fit": False,  # move each frame's start and end onto the gaps between pictures in the thumbnail
         "focus_mode": "frame", "focus_point": None, "focus_position": 0,
         "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
         "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
-        "basename": "", "digits": 3, "start": 0, "archive": False, "photo_date": "",
-        "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 5,
+        "basename": "", "digits": 3, "start": 0, "photo_date": "",
+        "archive": True,          # Archive mode: RAW/ + Positive/ from one pass
+        "archive_default": True,  # Archive mode is switched on each time the app starts (Additional settings)
+        "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 6,
         "stop_on_errors": False, "scan_log": True, "eject_after": False, "auto_thumbnail": True,
         "dust_method": "builtin", "grain": 0, "restore": 0,
+        "preview_af": True, "preview_ae": True,  # Preview scan: autofocus / meter each frame (off = quicker, may be soft or off in exposure)
+        "notify_on": False,  # messages when a strip is done (needs extras/notify.py); off = none of the ways below is used
         "notify_mac": False, "notify_shortcut": "", "notify_ntfy": "",
-        "roll": "", "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
+        "log_days": 30,  # the app log and driver notes in logs/ older than this are deleted; 0 = keep them all
+        "roll": "", "use_roll": True,  # False: save straight into the folder, no roll folder or _R part
+        "overwrite": False,  # a typed Next number may overwrite pictures already there (the page asks first)
+        "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
         "film_description": "",
         "rolls": {},   # roll folder name -> its film details, so going back to a roll brings them back
         "presets": {},  # name -> the scan settings saved under that name
@@ -33,8 +47,9 @@ def default_settings():
 
 
 # what a saved set of settings holds: how to scan and save, not where (folder, roll) or who to tell
-PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "multi_exposure", "ir", "clean", "dust_method", "grain", "restore",
+PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "multi_exposure", "clean", "dust_method", "grain", "restore",
                "focus_mode", "exposure_mode", "white_balance", "invert_preview", "negatives", "archive", "crop_scan", "auto_crop",
+               "auto_crop_trim", "auto_crop_sides", "frame_fit",
                "colour_space", "tone", "basename", "name_date", "digits", "stop_on_errors", "eject_after",
                "scan_log", "auto_thumbnail", "film_profile")
 
@@ -86,6 +101,9 @@ class SettingsMixin:
         kept = getattr(self, "test_kept", None)
         if kept:  # a test queue has its own settings swapped in for now: write down what was set before it
             data = {**data, **kept}
+        shared = getattr(self, "frame_kept", None)
+        if shared is not None:  # a frame with settings of its own is being scanned: those are not saved
+            data = {**data, **{k: shared[k] for k in FRAME_KEYS}}
         try:
             SETTINGS_FILE.write_text(json.dumps(data, indent=1))
         except OSError:
@@ -112,5 +130,15 @@ class SettingsMixin:
             # the prefix is optional and now starts out empty; "Scan" was only the old default
             if self.settings["basename"] == "Scan":
                 self.settings["basename"] = ""
-        self.settings["defaults_version"] = 5
+        if "notify_on" not in saved:
+            # settings from before the on/off switch: messages stay on if a way to send them was set up
+            self.settings["notify_on"] = bool(self.settings["notify_mac"] or self.settings["notify_shortcut"].strip()
+                                              or self.settings["notify_ntfy"].strip())
+        if not isinstance(saved.get("defaults_version"), int) or saved["defaults_version"] < 6:
+            # Archive mode became the default (2026-11-24): switch it on once for settings saved before
+            self.settings["archive"] = True
+        self.settings["defaults_version"] = 6
+        self.settings["ir"] = False  # the separate infrared file is no longer offered
+        if self.settings["archive_default"]:
+            self.settings["archive"] = True  # each start begins in Archive mode unless that is turned off
         self.save_settings()
