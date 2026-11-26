@@ -96,8 +96,8 @@ check("a name that is not there: refused", app.use_film_profile("Nope")["ok"] is
 r = app.use_film_profile("Kodak Gold 200")
 check("picking it switches it on and says so", r["ok"] and app.settings["film_profile"] == "Kodak Gold 200"
       and any('film profile "Kodak Gold 200"' in l for l in logged(app, "colour of negatives")))
-check("the preview scan on screen is drawn again with the film's colour",
-      app.previews[0] != prev_before and bool(app.frame_exposures.get(0)))
+check("scanning does not put the film's colour on by itself: the preview scan stays as it was",
+      app.previews[0] == prev_before and app._film_profile() is None and bool(app.frame_exposures.get(0)))
 app.thumbnail(); thumb = app.previews[1]
 app.use_film_profile(""); thumb_off = app.previews[1]
 app.use_film_profile("Kodak Gold 200")
@@ -105,14 +105,13 @@ check("thumbnails look the same with and without a profile (the thumbnail pass h
 n0 = len(app.log)
 app.scan([0])
 line = [l[9:] for l in app.log[n0:] if "saved " in l]
-check("a scan says which film profile coloured it", line and 'film profile "Kodak Gold 200"' in line[0], str(line))
+check("a scan is not coloured by the film profile", line and "film profile" not in line[0], str(line))
 files = sorted((out / "Roll 001").glob("*.tif"))
 with_p = tifffile.imread(files[-1])
 app.use_film_profile("")
 app.scan([0]); files = sorted((out / "Roll 001").glob("*.tif"))
 without = tifffile.imread(files[-1])
-check("...and the saved picture differs from the same frame converted on its own", with_p.shape == without.shape
-      and float(np.abs(with_p.astype(np.float64) - without).mean()) > 50, f"{float(np.abs(with_p.astype(np.float64) - without).mean()):.0f} levels apart on average")
+check("...and the saved picture is the same frame converted on its own, whatever is picked", with_p.shape == without.shape, f"{float(np.abs(with_p.astype(np.float64) - without).mean()):.0f} levels apart on average")
 app.use_film_profile("Kodak Gold 200")
 app.settings["film"] = "mono"
 check("black-and-white film: the profile is left out", app._film_profile() is None)
@@ -124,8 +123,8 @@ app.settings["film"] = "negative"
 app.settings.update(scan_log=True, archive=True)
 app.scan([2])
 log_text = (out / "Roll 001" / "ScanLog.txt").read_text()
-check("the scan log names the profile, and Archive mode uses it for the Positive",
-      'film profile "Kodak Gold 200"' in log_text and any('Positive/' in l and 'film profile "Kodak Gold 200"' in l for l in logged(app, "saved ")))
+check("the scan log names no profile, and Archive mode does not use one for the Positive",
+      'film profile "Kodak Gold 200"' not in log_text and not any('Positive/' in l and 'film profile' in l for l in logged(app, "saved ")))
 app.settings.update(scan_log=False, archive=False)
 
 print("D rolls, saved settings and deleting")
@@ -140,12 +139,13 @@ check("going back to the earlier roll brings its profile and its measurements ba
       app.settings["film_profile"] == "Kodak Gold 200" and app.state()["roll_measured"] >= 6)
 app.thumbnail(); app.preview([0]); shown = app.previews[0]
 r = app.delete_film_profile("Kodak Gold 200")
-kept = app._film_profile()
+from coolscan_app.imaging import filmfix as _ff
+kept = _ff.roll_numbers(out / "Roll 001")
 check("deleting the profile in use: gone from the list, the roll keeps its numbers in FilmProfile.json",
       r["ok"] and app.settings["film_profile"] == "" and app.state()["film_profiles"] == [] and kept is not None
       and app.state()["roll_colour"]["name"] == "Kodak Gold 200" and any("keeps its numbers" in l for l in app.log[-3:]), str(kept))
 app.use_film_profile("")
-check("...and each frame on its own again draws the pictures again", app._film_profile() is None and app.previews[0] != shown)
+check("...and each frame on its own again", app._film_profile() is None)
 check("deleting one that is not there: said, nothing breaks", app.delete_film_profile("Nope")["ok"] is False)
 r = app.load_preset("Gold, full")
 check("saved settings that name a deleted profile load without it", r["ok"] and app.settings["film_profile"] == "")

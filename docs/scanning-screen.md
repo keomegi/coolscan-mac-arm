@@ -250,31 +250,13 @@ buttons says what is set now.
   already in the roll folder (including `RAW/` and `Positive/`), whatever their prefix. Type
   another number to carry on from there; it is used for the next batch, then the roll counts on
   by itself again. A name that is already taken is skipped. Nothing is ever overwritten.
-- **Colour of negatives** (in the Film box, for colour negatives): where the colour of the
-  finished picture comes from.
-  - *Each frame on its own* (the default, and how it always worked): each of red, green and
-    blue is stretched between the thinnest and densest film in that one frame. That takes the
-    orange mask off and suits ordinary pictures. It goes wrong when a frame is mostly one colour
-    (grass, a sunset, blue sky): the app cannot tell that from a colour cast and takes it out.
-  - *A film profile*: the colour comes from the film instead of from the frame. The app measures
-    every frame as it is scanned (the thinnest and densest film in each colour, with the
-    scanner's exposure taken out so that frames can be compared) and keeps the numbers in
-    `FilmColour.json` in the roll's folder. **Save this roll's film…** turns the measurements of
-    the roll you are in into a profile under a name you give, for example "Kodak Gold 200". It
-    needs at least 3 scanned frames; a whole strip or a whole roll is better, and frames with
-    deep shadows and bright highlights help most. Pick the profile under "Colour from" and
-    every frame scanned after that gets the same colour: a grey wall stays grey even in a frame
-    full of grass. Brightness is still set frame by frame, by the same amount for all three
-    colours. Use it for the rest of that roll and for later rolls of the same film.
-  - A profile is switched off when you start a new roll (it may be another film) and comes back
-    when you go back to a roll that used it. It is part of saved settings. Thumbnails are always
-    shown "each frame on its own", because the thumbnail pass has no exposure to go by; a preview
-    scan and the scan itself show the profile's colour.
-  - These are not maker's profiles like SilverFast's NegaFix, which are measured film by film
-    on each scanner model. The numbers here come from your own film on your own scanner, which
-    is the only place accurate ones can come from without that kind of measuring. A profile
-    made from a roll with odd lighting carries that into every roll you use it on; delete it and
-    save it again from a better roll.
+- **Colour of negatives**: each frame's colour is worked out from that frame alone when it is
+  scanned (each of red, green and blue is stretched between the thinnest and densest film in the
+  frame, which takes the orange mask off). Every frame's film is also measured and kept with the
+  roll, in `FilmColour.json` in its folder, by itself; there is nothing to pick or save here.
+  Nothing is corrected from those measurements while scanning. To correct a roll's colours from
+  its film, open it in Scanned pictures: see [Film correction](library.md), where it can be put
+  on one picture or the whole roll and taken off again.
 - **Negative tone**: "Flat" (default) keeps the plain conversion, lighter and lower in contrast,
   as a starting point for editing (for example Lightroom's Auto). "Nikon Scan look" gives
   negatives the same brightness and contrast as Nikon Scan, measured on five frames scanned in

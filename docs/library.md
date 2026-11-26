@@ -57,12 +57,31 @@ Code: `coolscan_app/exporting.py`, `web/export.js`; checks `checks/scripts/expor
 `checks/page/page_export.js`. Not yet tried on a Mac at the time of writing: JPEG and HEIC through
 `sips`, and how Lightroom shows the DNG.
 
-## Colour of negatives, kept with each roll
+## Film correction (the colour of negatives), kept with each roll
 
-Each roll folder can have a `FilmProfile.json` that says where its colour negatives get their
-colour from. The scanning screen (Film box, "Colour from") and the Library (the **Colour of
-negatives** row under a roll's description) both read and write it, so they always agree, and
-going back to a roll later brings it back.
+**How to use it**
+
+1. Open a picture of the roll and press **Film base** (key B). The frame is shown as it was
+   scanned, as a negative.
+2. Click on clear film: the strip between two pictures or along the film edge, the lightest orange
+   or yellow part. Not the black holder and not the picture.
+3. Choose **This picture** to try it on that picture only, or **Whole roll** to put it on every
+   picture of the roll. **Not now** keeps the film base with the roll without using it.
+
+Pictures with the correction on show **🎞 film corrected** under them. **Film correction** beside an
+open picture switches it off or on for that picture; for several at once tick them and use
+**Film correction: On / Off** in the row of actions. The **Film correction, whole roll** row under
+the roll's description says how many pictures have it, has **Use on whole roll**, and *Off* in its
+list takes it off the whole roll (the film base stays kept). The same short explanation is on the
+page itself, under "How to use film correction".
+
+Scanning never corrects from the film by itself: each frame is developed on its own, and its film
+is measured and kept with the roll (`FilmColour.json`) without anyone asking. The correction is
+put on here, where it can be taken off again.
+
+Each roll folder can have a `FilmProfile.json` that says what its colour negatives are corrected
+from (`"scope": "pictures"` in it means only the pictures it was switched on for, which
+`Library.json` marks with `"colour": "roll"`).
 
 A film's three colour layers do not gain density at the same rate, and in old film (Orwocolor,
 Svema) they have drifted far apart, most of all in the thin parts: two numbers per colour then
@@ -73,15 +92,14 @@ run against each other from the clearest to the densest film (each frame's measu
 kept that has its RAW files looked at once, the first time it is shown. The curve assumes the roll
 as a whole has no colour of its own (a roll of nothing but grass would come out less green).
 
-- **Each frame on its own** (no file, the old way): each frame's colour is worked out from that
-  frame alone.
+- **Off (pictures as saved)** (no file): each frame's colour is the one it was scanned with,
+  worked out from that frame alone.
 - **This roll's own frames**: from the frames of this roll measured so far (needs 3 or more;
   frames are measured when they are scanned as colour negatives). It follows as more are scanned.
 - **Film profile: …**: a saved film profile. Its numbers are copied into the roll's file, so the
   roll keeps them even if the profile is deleted later.
 - **Film base picked**: for a film with an unusual mask (Orwocolor, Svema colour, expired film).
-  Open a picture, press **Film base…** (key B): the whole frame is shown as scanned; click on clear
-  film, between two frames or along the edge, where nothing was exposed. The base sets where each
+  Picked as in the steps above. The base sets where each
   colour starts; how far each colour goes still comes from the roll's measured frames (or that
   frame, if fewer than 3 are measured). A spot that is as dense as the picture is refused, and an
   uneven spot or one denser than parts of the picture gets a warning.
@@ -96,8 +114,8 @@ without a RAW file, RAW files themselves and other versions (Re-developed, Edite
 are. Tones the saved picture had already cut off at pure black or white cannot come back; to get
 them, develop the RAW file again on the Re-develop page.
 
-**One picture on its own.** In the viewer, **Own colour** colours that picture on its own instead
-of with the roll's colour (ticked pictures: the **Colour** row). It is kept in `Library.json`
+**One picture off or on.** In the viewer, **Film correction** switches the roll's correction off
+or on for that picture (ticked pictures: the **Film correction** row). It is kept in `Library.json`
 (`"colour": "own"` or `"roll"`); the file is not changed.
 
 **Another film scanned into the roll by mistake.** Every colour negative scanned is compared with

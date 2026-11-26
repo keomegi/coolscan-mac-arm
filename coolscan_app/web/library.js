@@ -187,6 +187,7 @@ function drawGrid() {
     if (p.flag === 'reject') rate.appendChild(el('span', 'rj', '✕ rejected'));
     if (p.rescan) rate.appendChild(el('span', 'rs', '🎞 rescan'));
     if (p.edit) { const e = el('span', 'ed', '✂ edited'); e.title = 'Shown with your crop and turn. The file itself is unchanged; Export makes a copy with them.'; rate.appendChild(e); }
+    if (p.film) { const e = el('span', 'fm', '🎞 film corrected'); e.title = 'Shown with this roll\'s film correction. The file itself is unchanged; Export makes a copy with it.'; rate.appendChild(e); }
     b.appendChild(rate);
     const marks = [];
     if (roll.search) marks.push(p.roll);
@@ -492,23 +493,36 @@ $('desc').addEventListener('keydown', ev => { if ((ev.metaKey || ev.ctrlKey) && 
 // ---------------------------------------------------------------- the roll's colour of negatives (FilmProfile.json in its folder)
 function drawFilmColour(fc) {
   const row = $('fcolrow'), sel = $('fcol');
-  row.hidden = !fc;
+  row.hidden = !fc; $('fcolhelp').hidden = !fc;
   if (!fc) return;
   sel.textContent = '';
   const add = (v, t) => { const o = el('option', null, t); o.value = v; sel.appendChild(o); };
-  add('frame', 'Each frame on its own (as saved)');
-  add('roll', "This roll's own frames (" + fc.measured + ' measured)');
-  if (fc.mode === 'base' || fc.has_base) add('base', 'Film base picked' + (fc.base_from ? ' on ' + fc.base_from.split('/').pop() : ''));
+  const some = fc.scope === 'pictures' && fc.mode !== 'frame';   // on for the pictures it was switched on for only
+  add('frame', 'Off (pictures as saved)');
+  add('roll', "From this roll's own frames (" + fc.measured + ' measured)');
+  if (fc.mode === 'base' || fc.has_base) add('base', 'From the film base picked' + (fc.base_from ? ' on ' + fc.base_from.split('/').pop() : ''));
   for (const n of fc.profiles) add('profile:' + n, 'Film profile: ' + n);
   if (fc.mode === 'profile' && fc.name && !fc.profiles.includes(fc.name)) add('profile:' + fc.name, 'Film profile: ' + fc.name + ' (kept with this roll)');
-  sel.value = fc.mode === 'profile' ? 'profile:' + fc.name : fc.mode;
+  if (some) { add('some', 'On ' + (fc.used || 0) + ' of ' + (fc.of || 0) + ' pictures only'); sel.lastChild.disabled = true; }
+  sel.value = some ? 'some' : fc.mode === 'profile' ? 'profile:' + fc.name : fc.mode;
+  $('b-fcolall').hidden = !(some || (fc.mode === 'frame' && fc.has_base));
   let words = '';
   if (!fc.raw) words = 'Shown only on pictures with a RAW file (Archive mode): this folder has none.';
-  else if (fc.mode === 'frame') words = 'Pictures are shown as they were saved. For an unusual film (Orwocolor…) open a picture and press Film base….';
+  else if (some) words = 'On for ' + (fc.used || 0) + ' of ' + (fc.of || 0) + ' pictures, from the film base. The files are not changed.';
+  else if (fc.mode === 'frame') words = fc.has_base ? 'A film base is kept with this roll, and no picture uses it yet.' : 'Off: pictures are shown as they were saved.';
   else if (fc.mode === 'roll' && !fc.numbers) words = 'Needs ' + fc.least + ' measured frames: shown as saved until then.';
-  else words = 'Pictures with a RAW file are shown and exported with this colour. The files are not changed; "Show original" shows them as saved.';
+  else words = 'On for the whole roll (' + (fc.used || 0) + ' pictures). The files are not changed; "Show original" shows them as saved.';
   say('fcolmsg', words);
 }
+$('b-fcolall').onclick = async () => {
+  if (!roll || roll.key == null) return;
+  say('fcolmsg', 'Saving…');
+  const r = await post('/api/library/film_use', {key: roll.key, use: 'roll', base: true});
+  if (!r.ok) { say('fcolmsg', r.error || 'That did not work.', 'warn'); return; }
+  stamp++;
+  await refresh();
+  drawFilmColour(roll.film_colour);
+};
 $('fcol').onchange = async () => {
   if (!roll || roll.key == null) return;
   const v = $('fcol').value, mode = v.startsWith('profile:') ? 'profile' : v;
@@ -517,7 +531,7 @@ $('fcol').onchange = async () => {
   if (!r.ok) { say('fcolmsg', r.error || 'That did not work.', 'warn'); drawFilmColour(roll.film_colour); return; }
   stamp++;
   await refresh();
-  drawFilmColour(r.film_colour);
+  drawFilmColour(roll.film_colour);
   if (!$('viewer').hidden && items[at]) show(at, alt);
 };
 
@@ -526,7 +540,7 @@ function current() { return alt || items[at].file; }
 const bigURL = (p, file, view) => '/library/big.png?' + q({key: p.key, file, v: p.v, view: view || 'edited', s: stamp, e: file === p.file ? esig(p) : ''});
 async function show(i, other) {
   if (i < 0 || i >= items.length) return;
-  if (i !== at || (other || null) !== alt) viewOrig = false;
+  if (i !== at || (other || null) !== alt) { viewOrig = false; hideBaseAsk(); }
   at = i; alt = other || null;
   stopBase();
   stopCrop();
@@ -556,8 +570,8 @@ async function show(i, other) {
   const s0 = (info && info.scan) || {};
   $('b-base').hidden = !(info && info.raw && (!s0.film || s0.film === 'negative') && !roll.search);
   const fc0 = info && info.film_colour;
-  $('b-own').hidden = !(fc0 && info.raw && !isRaw && (fc0.mode !== 'frame' || fc0.own) && (!s0.film || s0.film === 'negative'));
-  $('b-own').setAttribute('aria-pressed', String(!!(fc0 && fc0.own)));
+  $('b-own').hidden = !(fc0 && info.raw && !isRaw && !roll.search && (fc0.mode !== 'frame' || fc0.has_base) && (!s0.film || s0.film === 'negative'));
+  $('b-own').setAttribute('aria-pressed', String(!!(fc0 && fc0.on)));
   $('b-crop').hidden = $('b-turnl').hidden = $('b-turnr').hidden = isRaw;  // a RAW file is cropped on the Re-develop page
   drawOrig();
   drawInfo(r);
@@ -743,9 +757,9 @@ function drawInfo(r) {
   }
   const fcol = r.film_colour;
   if (fcol && (fcol.mode !== 'frame' || fcol.why || fcol.own)) {
-    dl = section('Colour of negatives');
-    row(dl, 'This roll', fcol.words);
-    row(dl, 'This picture', fcol.own && !fcol.applied ? 'its own colour, not the roll\'s' + (fcol.why ? '. ' + fcol.why : '') : fcol.applied && fcol.own ? 'shown with its own colour, not the roll\'s (the file is not changed)' : fcol.applied ? 'shown with it (the file is not changed)' + (fcol.tone ? ', ' + (fcol.tone === 'nikon' ? 'Nikon Scan' : 'flat') + ' tone kept' : '')
+    dl = section('Film correction');
+    row(dl, 'This roll', fcol.mode === 'frame' ? 'off' : 'from ' + fcol.words + (fcol.scope === 'pictures' ? ', on picked pictures only' : ''));
+    row(dl, 'This picture', fcol.mode !== 'frame' && !fcol.on && !fcol.own ? 'off: shown as saved' : fcol.own && !fcol.applied ? 'its own colour, not the roll\'s' + (fcol.why ? '. ' + fcol.why : '') : fcol.applied && fcol.own ? 'shown with its own colour, not the roll\'s (the file is not changed)' : fcol.applied ? 'shown with it (the file is not changed)' + (fcol.tone ? ', ' + (fcol.tone === 'nikon' ? 'Nikon Scan' : 'flat') + ' tone kept' : '')
       : (fcol.why || 'shown as saved'));
   }
   const p = items[at];
@@ -1073,17 +1087,48 @@ $('b-cropsave').onclick = async () => {
   learnShow();
 };
 
-// ---------------------------------------------------------------- one picture on its own colour, not the roll's
+// ---------------------------------------------------------------- the roll's film correction on one picture or the ticked ones
+async function filmOn(pics, msgBox) {
+  if (!pics.length) return {ok: false, error: 'No pictures picked.'};
+  say(msgBox, 'Saving…');
+  return post('/api/library/film_use', {key: pics[0].key, use: 'pictures', files: pics.map(p => p.file)});
+}
+const filmOff = () => ({colour: roll && roll.film_colour && roll.film_colour.scope === 'pictures' ? null : 'own'});
 $('b-own').onclick = async () => {
-  const p = items[at], on = !(info && info.film_colour && info.film_colour.own);
-  await changed(await post('/api/library/edit', {key: p.key, files: [p.file], colour: on ? 'own' : 'roll'}),
-    on ? 'This picture is coloured on its own now, not with the roll\'s colour. The file was not changed.'
-       : 'This picture gets the roll\'s colour again. The file was not changed.');
+  const p = items[at], on = !(info && info.film_colour && info.film_colour.on);
+  hideBaseAsk();
+  await changed(on ? await filmOn([p], 'cropmsg') : await post('/api/library/edit', {key: p.key, files: [p.file], ...filmOff()}),
+    on ? 'Film correction is on for this picture. The file was not changed.'
+       : 'Film correction is off for this picture: it is shown as saved. The file was not changed.');
+  if (roll && !roll.search) drawFilmColour(roll.film_colour);
 };
-$('a-own').onclick = () => edit(tickedPics().filter(p => !p.file.startsWith('RAW/')), {colour: 'own'});
-$('a-rollcol').onclick = () => edit(tickedPics().filter(p => !p.file.startsWith('RAW/')), {colour: 'roll'});
+$('a-own').onclick = async () => { await edit(tickedPics().filter(p => !p.file.startsWith('RAW/')), filmOff()); if (roll && !roll.search) drawFilmColour(roll.film_colour); };
+$('a-rollcol').onclick = async () => {
+  const pics = tickedPics().filter(p => !p.file.startsWith('RAW/'));
+  if (!pics.length || !roll || roll.search) return;
+  const r = await filmOn(pics, 'actmsg');
+  if (!r.ok) { say('actmsg', r.error || 'That did not work.', 'warn'); return; }
+  stamp++;
+  await refresh();
+  drawFilmColour(roll.film_colour);
+  say('actmsg', 'Film correction is on for ' + pics.length + (pics.length === 1 ? ' picture.' : ' pictures.') + ' The files were not changed.', 'ok');
+};
 
 // ---------------------------------------------------------------- the film base: picked on the frame as scanned
+function hideBaseAsk() { $('baseask').hidden = true; }
+async function useBase(use) {
+  const p = items[at];
+  hideBaseAsk();
+  say('cropmsg', 'Saving…');
+  const r = await post('/api/library/film_use', {key: p.key, use, files: [p.file], base: true});
+  const n = r.ok && r.film_colour ? r.film_colour : null;
+  await changed(r, use === 'roll' ? 'Film correction is on for the whole roll. The files were not changed; Show original shows a picture as saved.'
+    : 'Film correction is on for this picture only. The file was not changed; Show original shows it as saved.');
+  if (n && roll && !roll.search) drawFilmColour(roll.film_colour);
+}
+$('b-baseone').onclick = () => useBase('pictures');
+$('b-baseall').onclick = () => useBase('roll');
+$('b-basenone').onclick = () => { hideBaseAsk(); say('cropmsg', 'The film base is kept with this roll. Press Film correction to use it on a picture.'); };
 function stopBase() {
   if (!picking) return;
   picking = false;
@@ -1094,7 +1139,7 @@ function stopBase() {
 $('b-base').onclick = () => {
   const p = items[at];
   if (picking) { stopBase(); $('big').src = bigURL(p, current(), viewOrig ? 'original' : 'edited'); say('cropmsg', ''); return; }
-  stopCrop(); setCompare(false);
+  stopCrop(); setCompare(false); hideBaseAsk();
   picking = true;
   $('stage').classList.add('picking');
   $('b-base').setAttribute('aria-pressed', 'true');
@@ -1102,7 +1147,7 @@ $('b-base').onclick = () => {
   $('big').onload = () => { $('loading').hidden = true; };
   $('big').src = bigURL(p, current(), 'negative');
   say('cropmsg', 'This is the whole frame as scanned. Click on clear film: the strip between two frames or along the film edge, '
-    + 'where nothing was exposed (the lightest, orange or yellow part), not the holder. Esc or Film base… again to stop.');
+    + 'where nothing was exposed (the lightest, orange or yellow part), not the holder. You then choose this picture or the whole roll. Esc or Film base again to stop.');
 };
 $('big').addEventListener('click', async ev => {
   if (!picking) return;
@@ -1113,15 +1158,15 @@ $('big').addEventListener('click', async ev => {
   m.style.left = (ev.clientX - w.left) + 'px'; m.style.top = (ev.clientY - w.top) + 'px'; m.hidden = false;
   say('cropmsg', 'Measuring the film base…');
   const p = items[at];
-  const r = await post('/api/library/film_base', {key: p.key, file: current(), x, y});
+  const r = await post('/api/library/film_base', {key: p.key, file: current(), x, y, use: ''});
   if (!r.ok) { say('cropmsg', r.error || 'That did not work.', 'warn'); return; }
   stopBase();
   stamp++;
   await refresh();
-  if (roll && !roll.search) drawFilmColour(r.film_colour);
+  if (roll && !roll.search) drawFilmColour(roll.film_colour);
   await show(at, alt);
-  say('cropmsg', 'Film base picked: this roll\'s negatives are now coloured from it (the files are not changed; Show original shows them as saved).'
-    + (r.warn ? ' ' + r.warn : ''), r.warn ? 'warn' : 'ok');
+  $('baseask').hidden = false;
+  say('cropmsg', 'Film base measured and kept with this roll.' + (r.warn ? ' ' + r.warn : ''), r.warn ? 'warn' : 'ok');
 });
 
 // ---------------------------------------------------------------- keys

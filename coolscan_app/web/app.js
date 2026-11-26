@@ -34,38 +34,6 @@ const keys = ['film', 'format', 'preview_dpi', 'invert_preview', 'rotate180', 'f
   'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan', 'auto_crop', 'use_roll', 'overwrite', 'frame_auto', 'show_frame_offset', 'auto_crop_trim', 'auto_crop_sides', 'notify_on', 'log_days', 'archive_default', 'auto_crop_learn', 'crop_learn_delete_after', 'auto_turn', 'auto_turn_learn', 'preview_af', 'preview_ae', 'show_rotate180', 'auto_preview', 'superfine'];
 keys.forEach(k => { const e = $('s-' + k); e.addEventListener('change', () => api('/api/settings', {[k]: e.type === 'checkbox' ? e.checked : e.value})); });
 
-// ---------------------------------------------------------------- film profiles: the colour of a film, measured from a roll
-function profileSay(text) { const m = $('profilemsg'); m.hidden = !text; m.textContent = text || ''; }
-$('filmprofile').onchange = async () => {
-  const r = await api('/api/film_profile', {action: 'use', name: $('filmprofile').value});
-  profileSay(r.ok ? '' : (r.busy ? 'Wait until the scan finishes, then pick it again.' : (r.error || 'That did not work.')));
-  if (!r.ok) { const rc = S.roll_colour || {}; $('filmprofile').value = rc.mode === 'roll' ? '@roll' : rc.mode === 'base' ? '@base' : rc.mode === 'profile' ? rc.name : ''; }
-};
-$('b-profilenew').onclick = () => {
-  const st = S.settings, film = [st.film_brand, st.film_stock, st.film_iso].filter(Boolean).join(' ');
-  $('profiledel').hidden = true; $('profilenew').hidden = false; profileSay('');
-  $('profilename').value = st.film_profile || film; $('profilename').focus(); $('profilename').select();
-};
-$('b-profilecancel').onclick = () => { $('profilenew').hidden = true; };
-async function profileSave() {
-  const r = await api('/api/film_profile', {action: 'save', name: $('profilename').value});
-  if (!r.ok) { profileSay(r.error || 'That did not work.'); return; }
-  $('profilenew').hidden = true;
-  profileSay('Saved "' + r.name + '" from ' + r.frames + ' frames. Pick it above to use it.');
-}
-$('b-profilesave').onclick = profileSave;
-$('profilename').addEventListener('keydown', ev => { if (ev.key === 'Enter') profileSave(); if (ev.key === 'Escape') $('profilenew').hidden = true; });
-$('b-profiledel').onclick = () => {
-  const name = $('filmprofile').value; if (!name) return;
-  $('profilenew').hidden = true; $('profiledel').hidden = false; $('profiledel').dataset.name = name;
-  $('profiledelmsg').textContent = 'Delete the film profile "' + name + '"? Pictures already saved stay as they are.';
-};
-$('b-profiledelno').onclick = () => { $('profiledel').hidden = true; };
-$('b-profiledelyes').onclick = async () => {
-  const r = await api('/api/film_profile', {action: 'delete', name: $('profiledel').dataset.name}); $('profiledel').hidden = true;
-  profileSay(r.ok ? '' : (r.busy ? 'Wait until the scan finishes, then try again.' : (r.error || 'That did not work.')));
-};
-
 // ---------------------------------------------------------------- the bar: scanner and main actions
 $('b-connect').onclick = () => api('/api/connect');
 $('b-load').onclick = () => api('/api/load');
@@ -741,7 +709,7 @@ function drawViewer(busy) {
 function drawSummaries(st) {
   const on = [];
   $('sum-presets').textContent = S.preset || (S.presets.length ? 'not saved' : '');
-  $('sum-film').textContent = optionText('s-film') + (st.film === 'negative' && st.film_profile ? ' · ' + st.film_profile : '');
+  $('sum-film').textContent = optionText('s-film');
   $('sum-roll').textContent = (st.roll || '').split(' - ')[0];
   $('sum-scan').textContent = st.dpi + ' dpi' + (st.clean && st.film !== 'mono' ? ' · dust removal' : '') + (st.samples > 1 ? ' · ' + st.samples + 'x' : '') + (+st.multi_exposure ? ' · Multi-Exposure' : '') + (+st.grain ? ' · grain ' + st.grain : '');
   $('sum-save').textContent = (st.archive ? 'RAW + Positive' : optionText('s-negatives')) + ' · ' + (st.colour_space === 'scanner' ? 'Scanner RGB' : st.colour_space.split(' ')[0]);
@@ -780,7 +748,7 @@ function scanSettings(st) {
   const film = textOf('film', st.film), dust = st.clean && st.film !== 'mono' ? textOf('dust_method', st.dust_method) : '';
   const slide = st.film === 'positive' || st.film === 'kodachrome';
   return [
-    film + (st.film === 'negative' && st.film_profile ? ' (' + st.film_profile + ')' : ''),
+    film,
     st.dpi + ' dpi',
     'dust removal: ' + dustWords(st.clean, st.dust_method, st.film),
     st.samples > 1 ? st.samples + 'x multi-sample' : '',
@@ -982,32 +950,6 @@ function render(force) {
   }
   $('b-presetdel').disabled = busy || !S.preset;
 
-  // film profiles
-  $('profilebox').hidden = st.film !== 'negative';
-  const fp = $('filmprofile'), profs = S.film_profiles || [], rc = S.roll_colour || {mode: 'frame', name: ''};
-  const n = S.roll_measured || 0, least = S.profile_least || 3;
-  // the roll's own colour (kept in the roll folder's FilmProfile.json, shared with Scanned pictures)
-  const rcValue = rc.mode === 'roll' ? '@roll' : rc.mode === 'base' ? '@base' : rc.mode === 'profile' ? rc.name : '';
-  if (document.activeElement !== fp) {
-    const kept = rc.mode === 'profile' && rc.name && !profs.some(p => p.name === rc.name) ? rc.name : '';
-    const want = profs.map(p => p.name + '/' + p.frames).join('\n') + '|' + n + '|' + rc.mode + '|' + kept;
-    if (fp.dataset.v !== want) {
-      fp.innerHTML = '';
-      const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; fp.appendChild(o); };
-      add('', 'Each frame on its own');
-      add('@roll', "This roll's frames (" + n + ')');
-      if (rc.mode === 'base') add('@base', 'Film base picked in Scanned pictures');
-      for (const p of profs) add(p.name, p.name);
-      if (kept) add(kept, kept + ' (kept with this roll)');
-      fp.dataset.v = want;
-    }
-    fp.value = rcValue;
-  }
-  const used = profs.find(p => p.name === st.film_profile);
-  $('profilehint').textContent = (used ? 'Measured from ' + used.frames + ' frames of ' + (used.roll || 'a roll') + (used.made ? ', ' + used.made : '') + '. ' : '')
-    + 'This roll: ' + n + (n === 1 ? ' frame' : ' frames') + ' measured' + (n < least ? ' (a profile needs ' + least + ' or more; frames are measured when scanned).' : '.');
-  fp.disabled = busy; $('b-profiledelyes').disabled = busy;
-  $('b-profilenew').disabled = n < least; $('b-profiledel').disabled = busy || !fp.value || fp.value[0] === '@' || !profs.some(p => p.name === fp.value);
 
   // focus and exposure
   const fl = S.focus_lock, el = S.exposure_lock, af = !c || c.autofocus;

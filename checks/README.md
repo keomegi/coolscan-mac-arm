@@ -66,7 +66,7 @@ start the app with a throwaway HOME and `python coolscan.py --demo --no-browser 
 
 ```
 node checks/page/page_test.js <that HOME>/Pictures/Coolscan <folder for pictures> 8795   # the ordinary screen
-node checks/page/page_profiles.js 8795 <folder for pictures>                             # film profiles (a fresh start of the app)
+node checks/page/page_film_correction.js <scans folder> <folder for pictures> 8795       # film correction in Scanned pictures, none on the scanning screen
 node checks/page/page_crop_scan.js 8795 <folder for pictures>                            # "Scan only the cropped part"
 node checks/page/page_crop_handles.js 8795 <folder for pictures>                         # changing a crop by its sides, corners or middle
 node checks/page/page_auto_crop.js 8795 <folder for pictures>                            # Auto crop (start the app with COOLSCAN_DEMO_BORDERS=1)

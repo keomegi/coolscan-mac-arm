@@ -44,16 +44,7 @@
 <label class="row" id="fmtrow"><span>Format</span><select id="s-format"><option value="">From holder</option></select></label>
 <label class="row"><span>Show negatives as positives</span><input type="checkbox" id="s-invert_preview"></label>
 <label class="row" id="row-rotate180" hidden><span>Turn every frame 180°</span><input type="checkbox" id="s-rotate180"></label>
-<div id="profilebox">
-<p class="sub">Colour of negatives</p>
-<label class="row"><span>Colour from</span><select id="filmprofile" aria-label="Where the colour of negatives comes from"></select></label>
-<p class="hint" id="profilehint"></p>
-<div class="btnrow"><button id="b-profilenew">Save this roll's film…</button><button id="b-profiledel">Delete</button></div>
-<div class="inline" id="profilenew" hidden><input type="text" id="profilename" maxlength="60" placeholder="Film, e.g. Kodak Gold 200" aria-label="Name of the film"><button class="primary" id="b-profilesave">Save</button><button id="b-profilecancel">Cancel</button></div>
-<div class="inline" id="profiledel" hidden><span id="profiledelmsg"></span><button id="b-profiledelyes">Delete</button><button id="b-profiledelno">Cancel</button></div>
-<p class="hint" id="profilemsg" hidden></p>
-</div>
-<p class="help"><i>Each frame on its own</i> works out a negative's colour from that frame alone, which can go wrong when a frame is mostly one colour (grass, sky, a sunset). A film profile uses the film's colour instead: every frame you scan is measured, and "Save this roll's film…" makes a profile from this roll. Pick it for later rolls of the same film. <i>This roll's own frames</i> uses the frames of this roll measured so far (3 or more). What you pick is kept with the roll, in FilmProfile.json in its folder, so Scanned pictures shows the roll's pictures the same way and going back to the roll brings it back. For a film with an unusual mask (Orwocolor, for example), open a picture in Scanned pictures and press "Film base…" to click on the clear film between frames. Brightness is still set per frame; thumbnails always use each frame on its own.</p>
+<p class="help">The colour of a negative is worked out from each frame on its own when it is scanned. Every frame's film is also measured and kept with the roll (FilmColour.json in its folder), by itself. Nothing is corrected from it while scanning: to correct a roll's colours from its film, open the roll in Scanned pictures and see "How to use film correction" there. It can be put on one picture or the whole roll and taken off again.</p>
 </div></details>
 
 

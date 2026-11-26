@@ -31,7 +31,7 @@ pytestmark = [pytest.mark.page,
 # script: (extra app arguments, extra environment, mark)
 PAGES = {
     "page_test.js": ((), {}, None),
-    "page_profiles.js": ((), {}, None),
+    "page_film_correction.js": ((), {}, None),
     "page_crop_scan.js": ((), {}, None),
     "page_crop_handles.js": ((), {}, None),
     "page_queue_buttons.js": ((), {}, None),
@@ -75,7 +75,7 @@ def test_page(name, app_copy, home, tmp_path):
     shots.mkdir()
     with running_app(app_copy, home, *args, env_extra=env) as (base, _):
         port = base.rsplit(":", 1)[1]
-        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name in ("page_test.js", "page_export.js", "page_camera.js")
+        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name in ("page_test.js", "page_export.js", "page_camera.js", "page_film_correction.js")
                 else [port, str(shots)])
         r = subprocess.run(["node", str(PAGE / name), *argv], cwd=PAGE, capture_output=True, text=True, timeout=600)
     out = r.stdout + r.stderr

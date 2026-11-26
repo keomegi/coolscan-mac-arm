@@ -188,7 +188,9 @@ def make_handler(app):
                     if path == "/api/library/film_colour":
                         return self._send(app.library_film_colour(key, body.get("mode"), body.get("name") or ""))
                     if path == "/api/library/film_base":
-                        return self._send(app.library_film_base(key, rel, body.get("x"), body.get("y")))
+                        return self._send(app.library_film_base(key, rel, body.get("x"), body.get("y"), str(body.get("use", "roll") or "")))
+                    if path == "/api/library/film_use":
+                        return self._send(app.library_film_use(key, body.get("use"), body.get("files") or ([rel] if rel else []), bool(body.get("base"))))
                     if path == "/api/library/to_develop":
                         return self._send(app.library_send_to_develop(key, body.get("files") or []))
                     if path == "/api/library/crop":

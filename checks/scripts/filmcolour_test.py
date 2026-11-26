@@ -98,7 +98,7 @@ png_roll = app.library_png(key, rel, big=True)
 check("the picture on show changes", png_roll != png_saved)
 check("Show original is as saved", app.library_png(key, rel, big=True, view="original") == png_saved)
 check("the file itself is untouched", pos_file.read_bytes() == before)
-check("scanning screen uses the roll's numbers", app._film_profile() == filmfix.roll_numbers(roll), str(app._film_profile()))
+check("scanning does not put the roll's numbers on by itself", app._film_profile() is None and filmfix.roll_numbers(roll) is not None, str(app._film_profile()))
 check("scanning screen shows it", app.roll_colour_state()["mode"] == "roll")
 
 # what the Library shows is what scanning with the roll's numbers would have made
@@ -131,7 +131,7 @@ check("base measured right", res.get("ok") and max(abs(b - (m + 3 - np.log10(600
 d = json.loads((roll / filmfix.ROLL_FILE).read_text())
 check("FilmProfile.json says base", d["mode"] == "base" and d["from"] == rel)
 check("Library state offers it", res["film_colour"]["mode"] == "base" and res["film_colour"]["has_base"])
-check("scanning screen uses the base numbers", app._film_profile() == filmfix.roll_numbers(roll) and app.roll_colour_state()["mode"] == "base")
+check("scanning is told of the base, and does not use it by itself", app._film_profile() is None and app.roll_colour_state()["mode"] == "base")
 check("roll's 'each frame' then back to base keeps the base", app.library_film_colour(key, "frame")["ok"] and app.library_film_colour(key, "base")["ok"]
       and filmfix.read_roll(roll)["lo"] == d["lo"])
 
@@ -142,7 +142,7 @@ d = json.loads((roll / filmfix.ROLL_FILE).read_text())
 check("picked on the scanning screen -> roll file", res.get("ok") and d["mode"] == "profile" and d["name"] == "Orwo test" and d["lo"] == [3.3, 3.8, 4.5], str(d))
 check("settings follow", app.settings["film_profile"] == "Orwo test")
 app.delete_film_profile("Orwo test")
-check("the roll keeps the numbers after the profile is deleted", app._film_profile() == {"lo": [3.3, 3.8, 4.5], "hi": [4.6, 5.1, 5.9]})
+check("the roll keeps the numbers after the profile is deleted", filmfix.roll_numbers(roll) == {"lo": [3.3, 3.8, 4.5], "hi": [4.6, 5.1, 5.9]})
 check("Library offers the kept one", app.library_roll(key)["film_colour"]["name"] == "Orwo test")
 res = app.use_film_profile("@roll")
 check("@roll from the scanning screen", res.get("ok") and filmfix.read_roll(roll)["mode"] == "roll")
@@ -173,7 +173,7 @@ other.mkdir()
 app.switch_roll("Roll 008")
 check("another roll: each frame on its own", app._film_profile() is None)
 app.switch_roll(roll.name)
-check("back: the roll's own colour again", app._film_profile() == filmfix.roll_numbers(roll) and app.roll_colour_state()["mode"] == "roll")
+check("back: the roll's own colour again", filmfix.roll_numbers(roll) is not None and app.roll_colour_state()["mode"] == "roll")
 
 print("I one picture on its own colour")
 app.library_film_colour(key, "roll")
@@ -221,11 +221,11 @@ def meas(shift=(0, 0, 0), seed=0):
 
 
 app._note_colour("s2_001", meas(seed=1), EXP)
-check("the same film on a new strip: no warning", app.film_warning_state() is None and app._film_profile() is not None)
+check("the same film on a new strip: no warning", app.film_warning_state() is None)
 app.strip_id += 1
 app._note_colour("s3_001", meas((0, 0.02, -0.38), seed=2), EXP)   # an orange-masked film after the yellow one
 w = app.film_warning_state()
-check("another film: the screen is told", w is not None and w["frames"] == 1 and w["had_colour"], str(w))
+check("another film: the screen is told", w is not None and w["frames"] == 1, str(w))
 check("...the log says so", any("looks like another film" in l for l in app.log[-4:]))
 check("...the strip is coloured each frame on its own meanwhile", app._film_profile() is None)
 fc = json.loads((roll / "FilmColour.json").read_text())["frames"]
@@ -237,7 +237,7 @@ res = app.film_warning_answer("own")
 check("answered own: bar gone, strip stays on its own", res["ok"] and app.film_warning_state() is None and app._film_profile() is None)
 res = app.film_warning_answer("same")
 fc = json.loads((roll / "FilmColour.json").read_text())["frames"]
-check("answered same film: marks taken off, the roll's colour again", res["ok"] and not fc["s3_001"].get("own") and not fc["s3_002"].get("own") and app._film_profile() is not None)
+check("answered same film: marks taken off, the roll's colour again", res["ok"] and not fc["s3_001"].get("own") and not fc["s3_002"].get("own"))
 app._note_colour("s3_003", meas((0, 0.02, -0.38), seed=4), EXP)
 check("...and not asked again for this strip", app.film_warning_state() is None)
 app.strip_id += 1
@@ -343,6 +343,54 @@ nums_k = app._lib_numbers(roll)
 again = json.loads(fc_file.read_text())["frames"]
 check("the Library measures its RAW files once and the roll gets its curve", nums_k is not None and "curve" in nums_k
       and sum(1 for f_ in again.values() if f_.get("q")) >= 3, str(sorted(k_ for k_, f_ in again.items() if f_.get("q"))))
+
+print("L film base kept, then used on one picture or the whole roll")
+(roll / filmfix.ROLL_FILE).unlink(missing_ok=True)
+(roll / "Library.json").unlink(missing_ok=True)
+app.__dict__.pop("lib_match", None)
+rel2, rel3 = "Positive/20261125_002_R007.tif", "Positive/20261125_003_R007.tif"
+res = app.library_film_use(key, "pictures", [rel])
+check("nothing picked yet: refused, with what to do", not res.get("ok") and "Film base" in res.get("error", ""), str(res))
+saved1 = app.library_png(key, rel, big=True)
+res = app.library_film_base(key, rel, 0.03, 0.5, use="")
+d = filmfix.read_roll(roll)
+check("picking only keeps the film base: nothing is put on", res.get("ok") and d["mode"] == "frame" and d.get("base") and d.get("base_lo")
+      and app.library_png(key, rel, big=True) == saved1 and not any(p.get("film") for p in app.library_roll(key)["pictures"]), str(d))
+check("the page is told a base is kept", res["film_colour"]["has_base"] and res["film_colour"]["mode"] == "frame")
+res = app.library_film_use(key, "pictures", [rel], base=True)
+r = app.library_roll(key)
+on = {p["file"]: bool(p.get("film")) for p in r["pictures"]}
+check("this picture only: on for it, the others as saved", res.get("ok") and on[rel] and not on[rel2] and not on[rel3]
+      and filmfix.read_roll(roll)["scope"] == "pictures" and filmfix.read_roll(roll)["mode"] == "base", str(on))
+check("...the count for the page", r["film_colour"]["used"] == 1 and r["film_colour"]["of"] == 4 and r["film_colour"]["scope"] == "pictures", str(r["film_colour"]))
+i1, i2 = app.library_info(key, rel)["film_colour"], app.library_info(key, rel2)["film_colour"]
+check("...the picture is shown with it, another one is not", i1["on"] and i1["applied"] and not i2["on"] and not i2["applied"]
+      and app.library_png(key, rel, big=True) != saved1, str((i1, i2)))
+saved2 = app.library_png(key, rel2, big=True, view="original")
+check("...the other picture looks as saved", app.library_png(key, rel2, big=True) == saved2)
+res = app.library_film_use(key, "pictures", [rel2])
+check("a second picture switched on", res.get("ok") and app.library_roll(key)["film_colour"]["used"] == 2)
+app.library_edit(key, [rel2], {"colour": None})
+check("...and off again", app.library_roll(key)["film_colour"]["used"] == 1 and not app.library_info(key, rel2)["film_colour"]["on"])
+res = app.library_film_base(key, rel, 0.04, 0.5, use="")
+check("picking again keeps it on the same pictures", res.get("ok") and filmfix.read_roll(roll)["scope"] == "pictures" and app.library_roll(key)["film_colour"]["used"] == 1)
+res = app.library_film_use(key, "roll", base=True)
+r = app.library_roll(key)
+check("whole roll: every picture with a RAW file", res.get("ok") and r["film_colour"]["used"] == 4 and r["film_colour"]["scope"] == "roll"
+      and "scope" not in filmfix.read_roll(roll) and all(p.get("film") for p in r["pictures"]), str(r["film_colour"]))
+app.library_edit(key, [rel3], {"colour": "own"})
+check("one picture switched off in a whole roll", app.library_roll(key)["film_colour"]["used"] == 3 and not app.library_info(key, rel3)["film_colour"]["on"])
+res = app.library_film_use(key, "pictures", [rel3])
+check("...and on again", res.get("ok") and app.library_roll(key)["film_colour"]["used"] == 4 and filmfix.read_roll(roll).get("scope") != "pictures")
+res = app.library_film_colour(key, "frame")
+r = app.library_roll(key)
+check("off for the whole roll: no picture has it, the base is kept", res.get("ok") and r["film_colour"]["used"] == 0 and r["film_colour"]["has_base"]
+      and app.library_png(key, rel, big=True) == saved1)
+res = app.library_film_use(key, "pictures", [rel2], base=True)
+r = app.library_roll(key)
+check("one picture after that: only it (marks from before do not count)", res.get("ok") and r["film_colour"]["used"] == 1
+      and [p["file"] for p in r["pictures"] if p.get("film")] == [rel2], str([p["file"] for p in r["pictures"] if p.get("film")]))
+check("no picture file was changed", pos_file.read_bytes() == before)
 
 print()
 print("all good" if not bad else f"{len(bad)} FAILED: {bad}")

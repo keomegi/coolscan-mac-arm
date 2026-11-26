@@ -403,6 +403,7 @@ class LibraryMixin:
         marks = self._lib_marks(folder)
         colour = self._lib_colour_state(folder)
         fc = colour["stamp"] if colour["numbers"] else ""
+        picked = colour["scope"] == "pictures"   # the roll's colour only on the pictures it was switched on for
         own_frames = {}
         try:
             own_frames = {k: bool(v.get("own")) for k, v in json.loads((folder / COLOUR_FILE).read_text(encoding="utf-8"))["frames"].items() if isinstance(v, dict)}
@@ -412,15 +413,19 @@ class LibraryMixin:
             p.update(self._lib_marks_of(marks, p["file"]))
             if p["raw"] and not p.get("only_raw"):
                 own = p.get("colour") == "own" or (p.get("colour") is None and own_frames.get(p["name"].rsplit(".", 1)[0]))
+                on = bool(fc) and not own and (not picked or p.get("colour") == "roll")
                 p["own_colour"] = bool(own)
-                if fc or own:
-                    p["fc"] = (fc or "") + ("o" if own else "")
+                p["film"] = on   # shown with the roll's film colour (the mark under the small picture)
+                if on or own:
+                    p["fc"] = (fc if on else "") + ("o" if own else "")
             p["taken"] = self._lib_taken_of(folder, p["file"], marks["pictures"].get(p["file"]))
         text = ""
         try:
             text = (folder / DESCRIPTION_FILE).read_text(encoding="utf-8", errors="replace").strip()
         except OSError:
             pass
+        colour["used"] = sum(1 for p in pictures if p.get("film"))
+        colour["of"] = sum(1 for p in pictures if p["raw"] and not p.get("only_raw"))
         name = folder.name if key else "Loose pictures"
         if self.settings["use_roll"] and key and key == self.settings["roll"]:
             text = self.settings["film_description"] or text  # the scanning screen's copy is the newest
@@ -502,6 +507,9 @@ class LibraryMixin:
         mode = (filmfix.read_roll(folder) or {}).get("mode", "frame")
         out["film_colour"] = {"mode": mode, "words": filmfix.MODE_WORDS[mode], "applied": bool(fix), "why": why,
                               "own": self._lib_own_colour(folder, path, rel),
+                              "on": mode != "frame" and self._lib_roll_on(folder, path, rel),
+                              "has_base": bool((filmfix.read_roll(folder) or {}).get("base")),
+                              "scope": "pictures" if (filmfix.read_roll(folder) or {}).get("scope") == "pictures" else "roll",
                               "tone": fix["m"]["tone"] if fix else None}
         out["versions"] = self._lib_versions(folder).get(stem, [])
         return out
@@ -1147,6 +1155,8 @@ class LibraryMixin:
         own = self._lib_own_colour(folder, path, rel)
         if nums is None and not own:
             return None, ""
+        if not own and not self._lib_roll_on(folder, path, rel):
+            return None, ""   # the roll's colour is used on picked pictures only, and this is not one
         if own:
             nums = None   # this picture on its own, whatever the roll says
         raw = self._lib_raw_of(folder, path, rel)
@@ -1261,6 +1271,15 @@ class LibraryMixin:
             return c == "own"
         return filmfix.frame_is_own(folder, path.name.rsplit(".", 1)[0])
 
+    def _lib_roll_on(self, folder, path, rel):
+        """True when a picture is shown with the roll's film colour: every picture of the roll, or (when
+        FilmProfile.json says "scope": "pictures") only those it was switched on for; never one on its own colour."""
+        if self._lib_own_colour(folder, path, rel):
+            return False
+        if (filmfix.read_roll(folder) or {}).get("scope") != "pictures":
+            return True
+        return (self._lib_marks(folder)["pictures"].get(rel) or {}).get("colour") == "roll"
+
     def _lib_colour_state(self, folder):
         """For the page: where the folder's film colour comes from, and what can be picked."""
         d = filmfix.read_roll(folder) or {"mode": "frame"}
@@ -1270,7 +1289,7 @@ class LibraryMixin:
         return {"mode": d["mode"], "name": d.get("name") or "", "words": filmfix.MODE_WORDS[d["mode"]],
                 "numbers": {k: nums[k] for k in ("lo", "hi")} if nums else None, "curve": bool(nums and "curve" in nums),
                 "measured": measured, "least": 3, "base_from": d.get("from") if d.get("base") else None,
-                "has_base": bool(d.get("base")),
+                "has_base": bool(d.get("base")), "scope": "pictures" if d.get("scope") == "pictures" else "roll",
                 "profiles": sorted(n for n, p in self.settings["film_profiles"].items() if isinstance(p, dict)),
                 "stamp": hashlib.sha1(repr(st).encode()).hexdigest()[:10],
                 "raw": (folder / "RAW").is_dir()}
@@ -1304,8 +1323,8 @@ class LibraryMixin:
             d.update(lo=p["lo"], hi=p["hi"], frames=p["frames"])
         elif mode == "base":
             if old.get("mode") != "base" and not old.get("base"):
-                return {"ok": False, "error": "Pick the film base on a picture first: open a picture and press Film base…"}
-            d.update({k: old[k] for k in ("lo", "hi", "base", "from", "spot") if k in old})
+                return {"ok": False, "error": "Pick the film base on a picture first: open a picture, press Film base and click on clear film."}
+            d.update({k: old[k] for k in (("lo", "hi") if old.get("mode") == "base" else ()) + ("base", "from", "spot") if k in old})
         try:
             if mode == "frame" and not old:
                 pass   # no file is the same as each frame on its own
@@ -1324,9 +1343,11 @@ class LibraryMixin:
         self._lib_colour_changed(folder)
         return {"ok": True, "film_colour": self._lib_colour_state(folder)}
 
-    def library_film_base(self, key, rel, x, y):
+    def library_film_base(self, key, rel, x, y, use="roll"):
         """Measure the film base (the clear film between or beside the frames) at a spot of a picture's RAW
-        file, and colour the folder's negatives from it."""
+        file and keep it with the roll. use "roll": the folder's negatives are coloured from it at once;
+        "": it is only kept (pictures already coloured from the film base follow it), and library_film_use
+        puts it on a picture or on the whole roll."""
         folder, path = self._lib_file(key, rel)
         raw = self._lib_raw_of(folder, path, rel) if not rel.startswith("RAW/") else path
         if raw is None:
@@ -1360,6 +1381,12 @@ class LibraryMixin:
             warn.append("Parts of the picture are thinner than that spot, so it may not be clear film.")
         d = {"mode": "base", "lo": [round(v, 4) for v in base], "hi": [round(float(v), 4) for v in hi],
              "base": [round(v, 4) for v in base], "from": rel, "spot": [round(x, 4), round(y, 4)]}
+        if use != "roll":
+            old = {k: v for k, v in (filmfix.read_roll(folder) or {"mode": "frame"}).items() if k not in ("about", "changed")}
+            if old["mode"] == "base":
+                d = {**old, **d}   # the pictures that use the film base follow the new spot
+            else:
+                d = {**old, "base": d["base"], "from": d["from"], "spot": d["spot"], "base_lo": d["lo"], "base_hi": d["hi"]}
         try:
             filmfix.write_roll(folder, d)
         except OSError as e:
@@ -1367,6 +1394,52 @@ class LibraryMixin:
         self.say(f"library: film base of {folder.name} picked on {path.name}")
         self._lib_colour_changed(folder)
         return {"ok": True, "warn": " ".join(warn), "base": d["base"], "film_colour": self._lib_colour_state(folder)}
+
+    def library_film_use(self, key, use, files=None, base=False):
+        """Put the roll's film colour on pictures: use "roll" = every picture of the folder, "pictures" =
+        the given ones only. base: colour from the film base that was picked (always so for a roll that
+        goes by each frame on its own). Kept in FilmProfile.json and Library.json; no picture file is changed."""
+        folder = self._lib_folder(key)
+        files = [str(f) for f in files or []][:PICTURES_MOST]
+        for rel in files:
+            self._lib_file(key, rel)
+        if use not in ("roll", "pictures") or (use == "pictures" and not files):
+            return {"ok": False, "error": "No pictures picked."}
+        d = {k: v for k, v in (filmfix.read_roll(folder) or {"mode": "frame"}).items() if k not in ("about", "changed")}
+        fresh = False   # True: nothing is shown with this colour yet, so marks left from before do not count
+        if base or d["mode"] == "frame":
+            if not d.get("base"):
+                return {"ok": False, "error": "Pick the film base first: open a picture, press Film base and click on clear film."}
+            if d["mode"] != "base":
+                lo, hi = d.get("base_lo"), d.get("base_hi")
+                if not lo or not hi:
+                    return {"ok": False, "error": "Pick the film base again: open a picture, press Film base and click on clear film."}
+                d = {"mode": "base", "lo": lo, "hi": hi, "base": d["base"], "from": d.get("from"), "spot": d.get("spot"),
+                     "scope": "pictures"}
+                fresh = True
+        try:
+            with self.lib_lock:
+                marks = self._lib_marks(folder)
+                pics = marks["pictures"]
+                if use == "roll":
+                    d.pop("scope", None)
+                    for m in pics.values():
+                        m.pop("colour", None)   # the whole roll: also the pictures that were given their own colour
+                else:
+                    if fresh:
+                        for m in pics.values():
+                            if m.get("colour") == "roll":
+                                m.pop("colour")
+                    for rel in files:
+                        pics.setdefault(rel, {})["colour"] = "roll"
+                filmfix.write_roll(folder, d)
+                self._lib_save_marks(folder, marks)
+        except OSError as e:
+            return {"ok": False, "error": f"Could not save the film colour ({e.strerror or e})."}
+        self.say(f"library: film colour of {folder.name} ({filmfix.MODE_WORDS[d['mode']]}) put on "
+                 + ("the whole roll" if use == "roll" else f"{len(files)} picture(s)"))
+        self._lib_colour_changed(folder)
+        return {"ok": True, "use": use, "film_colour": self._lib_colour_state(folder)}
 
     # ------------------------------------------------------------------ ticked pictures to the Re-develop page
     def library_send_to_develop(self, key, files):

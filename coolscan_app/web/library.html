@@ -49,7 +49,10 @@ main.lib{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1
 #pictools .sep{width:1px;align-self:stretch;background:var(--line);margin:0 2px}
 #pictools #origtag{font-size:12px;color:var(--ink2)}
 #pictools #b-orig[aria-pressed=true]{border-color:var(--acc);color:var(--acc)}
-.pic .ed{color:var(--acc);margin-left:6px}
+.pic .ed,.pic .fm{color:var(--acc);margin-left:6px}
+#baseask{margin:0 0 10px;font-size:12px}
+#baseask .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+#b-own[aria-pressed=true]{border-color:var(--acc);color:var(--acc)}
 #imgwrap{position:relative;line-height:0;user-select:none;max-width:100%;max-height:100%}
 :root{--vstage:#c4c4c9;--edge:#1e78ff;--cropc:#22c55e}
 @media (prefers-color-scheme:dark){:root{--vstage:#5b5b60}}
@@ -214,7 +217,13 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <div class="descrow" id="rcamrow"><label for="rcam"><b>Camera</b></label><input type="text" id="rcam" placeholder="e.g. Nikon F3" style="width:220px" title="The camera this film was in. Kept with the roll and written into the pictures' tags, so Lightroom shows it as the camera. The pictures themselves are not changed."><button id="b-rcam" disabled>Save camera</button><span id="rcammsg" class="hint" role="status"></span></div>
 <div class="descrow" id="rdaterow"><label for="rdate"><b>Photo taken, whole roll</b></label><input type="text" id="rdate" placeholder="1988 or 1988-02-06" style="width:150px" title="A year (month, day and time of each scan stay) or a day: 1988-02-06 or 6.2.1988 (pictures one second apart, in order)"><button id="b-rdate">Set for every picture</button><label id="rdateownl" hidden><input type="checkbox" id="rdateown"> also the <span id="rdateownn"></span> with a date of their own</label><span id="rdatemsg" class="hint" role="status"></span></div>
 <p class="hint" id="rdatehelp" style="margin:-10px 0 14px">Sets when the photos were taken for all pictures of this roll, in the app and in the files' tags (the pictures themselves are not changed). One picture different: open it and change <b>Photo taken</b> beside it; it then keeps its own date.</p>
-<div class="descrow" id="fcolrow" hidden><label for="fcol">Colour of negatives</label><select id="fcol" title="Where this roll's colour negatives get their colour from. Kept in FilmProfile.json in the roll folder; the picture files are not changed."></select><span id="fcolmsg" class="hint" role="status"></span></div>
+<div class="descrow" id="fcolrow" hidden><label for="fcol"><b>Film correction, whole roll</b></label><select id="fcol" title="What the colours of this roll's colour negatives are corrected from. Picking one here puts it on every picture of the roll. Kept in FilmProfile.json in the roll folder; the picture files are not changed."></select><button id="b-fcolall" hidden title="Show every picture of this roll with the film correction (the files are not changed)">Use on whole roll</button><span id="fcolmsg" class="hint" role="status"></span></div>
+<details class="hint" id="fcolhelp" hidden style="margin:-10px 0 14px"><summary>How to use film correction</summary>
+<p style="margin:6px 0">Film correction sets the colours of colour negatives from the film itself, which helps most with films whose colours come out wrong (Orwocolor, old or faded film). It needs the RAW file that Archive mode keeps.</p>
+<ol style="margin:6px 0 6px 20px;padding:0"><li>Open a picture and press <b>Film base</b>. The frame is shown as it was scanned, as a negative.</li>
+<li>Click on clear film: the strip between two pictures or along the film edge, the lightest orange or yellow part. Not the black holder and not the picture.</li>
+<li>Choose <b>This picture</b> to try it on one picture, or <b>Whole roll</b> to put it on every picture of the roll.</li></ol>
+<p style="margin:6px 0">Pictures with it on show <b>🎞 film corrected</b> under them. <b>Film correction</b> beside an open picture switches it off or on for that picture, and for several at once tick them and use <b>Film correction</b> in the row of actions. To take it off the whole roll choose <i>Off</i> in the list above. The picture files are never changed: <b>Show original</b> shows a picture as it was saved, and <b>Export</b> makes a copy with the correction in it.</p></details>
 <div class="toolbar" id="filters">
 <label>Stars<select id="f-stars"><option value="0">Any</option><option value="1">★ 1 or more</option><option value="2">★★ 2+</option><option value="3">★★★ 3+</option><option value="4">★★★★ 4+</option><option value="5">★★★★★</option></select></label>
 <label>Flag<select id="f-flag"><option value="">Any</option><option value="pick">Picks</option><option value="notreject">Not rejected</option><option value="reject">Rejected</option><option value="rescan">🎞 Tagged for rescan</option></select></label>
@@ -245,7 +254,7 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <div class="arow"><b>Crop</b><button id="a-autocrop" title="Find each picture's edges and crop to them (kept as a setting; the files are not changed)">Auto crop</button><button id="a-croplearn" title="Learn how you crop from the crops you have made (in Scanned pictures and on the scanning screen), so Auto crop crops the same way">Learn from my crops</button>
 <button id="a-autoturn" title="Turn each ticked picture the way auto rotate learned from your turns, where it is sure (kept as a setting; the files are not changed)">Auto rotate</button>
 <button id="a-reset" title="Take the crop and turn off">Reset crop &amp; turn</button></div>
-<div class="arow"><b>Colour</b><button id="a-own" title="Colour each ticked picture on its own instead of with the roll's colour (kept as a setting; the files are not changed)">Own colour</button><button id="a-rollcol" title="Colour the ticked pictures with the roll's colour again">Roll's colour</button></div>
+<div class="arow"><b>Film correction</b><button id="a-rollcol" title="Show the ticked pictures with this roll's film correction (kept as a setting; the files are not changed)">On</button><button id="a-own" title="Show the ticked pictures without the film correction, as they were saved">Off</button></div>
 <div class="arow"><b>Export</b><button id="a-exportdlg" title="Copies of the ticked pictures for use elsewhere, with their crop, turn and colour put in: choose the folder, names, kind of file, size and metadata">Export…</button><button id="a-exportprev" title="Export the ticked pictures again with the settings used last time, without the dialog">Export with previous</button></div>
 <div class="arow"><b>Files</b><button id="a-finder">Show in Finder</button><button id="a-lr">Open in Lightroom</button>
 </div>
@@ -288,13 +297,14 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <button id="b-cropadv" hidden aria-pressed="false" title="Rulers, a line for each edge to drag on its own, and number boxes for exact trims (A)">Advanced</button>
 <button id="b-cropclear" hidden title="Take the crop off">No crop</button>
 <button class="primary" id="b-cropsave" hidden disabled title="Keep this crop (the file itself is not changed)">Done</button>
-<button id="b-base" hidden aria-pressed="false" title="Show the frame as scanned and click on the clear film between or beside the pictures: this roll's negatives are then coloured from that film base (B)">Film base…</button>
-<button id="b-own" hidden aria-pressed="false" title="Colour this picture on its own instead of with the roll's colour, for a frame of another film or one the roll's colour does not suit (kept as a setting; the file is not changed)">Own colour</button>
+<button id="b-base" hidden aria-pressed="false" title="Show the frame as scanned and click on the clear film between or beside the pictures. The film base is kept with the roll; you then choose this picture or the whole roll (B)">Film base</button>
+<button id="b-own" hidden aria-pressed="false" title="This roll's film correction on this picture: on or off (kept as a setting; the file is not changed)">Film correction</button>
 <button id="b-reset" hidden title="Take the crop and turn off">Reset</button>
 <button id="b-export" title="A copy of this picture for use elsewhere, with its crop, turn and colour put in: choose the folder, name, kind of file, size and metadata">Export…</button>
 </div></div>
 <div id="strip" role="list" aria-label="Pictures in this folder"></div>
 <aside id="info" aria-label="About this picture"><p class="hint" id="cropmsg" role="status"></p>
+<div id="baseask" hidden><b>Use the film base on</b><div class="btnrow"><button class="primary" id="b-baseone" title="Only this picture is shown with the film correction; the rest of the roll stays as it is">This picture</button><button id="b-baseall" title="Every picture of this roll is shown with the film correction">Whole roll</button><button id="b-basenone" title="Keep the film base with the roll and use it later">Not now</button></div></div>
 <div id="cropnums" hidden><b>Trim from each edge, in pixels</b>
 <div class="cnrow"><label for="cn-l">Left</label><span><input type="number" id="cn-l" min="0" step="1"> <span class="pc" id="cp-l"></span></span>
 <label for="cn-r">Right</label><span><input type="number" id="cn-r" min="0" step="1"> <span class="pc" id="cp-r"></span></span>

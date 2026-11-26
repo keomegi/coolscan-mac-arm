@@ -82,8 +82,7 @@ What to know:
   With fewer, or on slides, those runs are saved with each frame on its own colour and say why.
   While the test runs they wait in a hidden folder inside the test's folder, which is removed at
   the end. If the test is stopped before the profile is made, the log says those files have each
-  frame on its own colour. The profile is not kept: to keep one, scan the roll and use
-  "Save this roll's film..." as usual.
+  frame on its own colour. The profile is not kept.
 - **Turn and crop** of the frame apply to the test as they would to a scan of it.
 - A run that fails is marked and the queue goes on with the next; a lost scanner ends it.
 - A finished picture stretched "each frame on its own" changes all over when dust is removed,

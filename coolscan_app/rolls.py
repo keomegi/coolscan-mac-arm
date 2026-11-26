@@ -384,6 +384,11 @@ class RollsMixin:
         FilmProfile.json decides; a roll without one goes by the film profile picked (as before)."""
         if self._film() != "negative":
             return None
+        if not getattr(self, "testing", False):
+            # Scanning never puts a roll's film colour on by itself: each frame is developed on its own and
+            # measured (FilmColour.json), and the colour is put on in Scanned pictures, where it can be taken
+            # off again. Test mode still tries film profiles, as its runs ask for.
+            return None
         sf = getattr(self, "strip_film", None)
         if sf and sf["state"] in ("warn", "own") and sf["strip"] == getattr(self, "strip_id", 0) and sf["roll"] == self.settings["roll"]:
             return None   # a strip of another film: each frame on its own
