@@ -11,6 +11,16 @@ Coolscans nkscan drives (LS-50, LS-4000, LS-5000, LS-8000, LS-9000) should work 
 been tried with this app: see [docs/other-models.md](docs/other-models.md). It is not made for
 Intel Macs or Windows.
 
+## Screenshots
+
+Taken with the pretend scanner (`--demo`), so the pictures are test patterns.
+
+| Scan | Scanned pictures |
+| --- | --- |
+| ![The Scan page: settings on the left, the strip's frames, the big picture](docs/images/scan.png) | ![Scanned pictures: a roll with its notes, dates and pictures](docs/images/scanned-pictures.png) |
+| **Re-develop** | **Settings** |
+| ![Re-develop: settings, the RAW files, the picture in four versions](docs/images/re-develop.png) | ![The Settings window](docs/images/settings.png) |
+
 ## Set up (once)
 
 Needs an Apple Silicon Mac and Python 3.13 or newer. In Terminal, in this folder:
@@ -46,7 +56,7 @@ After an update, quit and start again. Neither way needs a new build or setup.
 
 ## What it does
 
-- **Thumbnail, preview, scan** of a strip or slide: one frame, some, or all.
+- **Find frames, preview, scan** of a strip or slide: one frame, some, or all.
 - **Dust and scratch removal** from the infrared pass, by the app's own cleaner (IR Clean) or
   nkscan's. Off for silver B&W film and Kodachrome.
 - **Negatives to positives**, per frame or with a film profile made from your own rolls.
