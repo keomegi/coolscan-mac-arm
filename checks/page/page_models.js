@@ -8,6 +8,10 @@ const { chromium } = require('playwright');
   const base = 'http://127.0.0.1:' + port;
   const b = await chromium.launch();
   const p = await b.newPage({ viewport: { width: +(process.env.PAGE_WIDTH || 1300), height: 950 }, deviceScaleFactor: 1 });
+  // the left cards open one at a time: a control in a closed card is reached by opening its card first
+  for (const m of ['click', 'selectOption', 'fill', 'check', 'uncheck']) { const f = p[m].bind(p); p[m] = async (sel, ...a) => {
+    if (typeof sel === 'string') await p.evaluate(s => { let e = null; try { e = document.querySelector(s); } catch (x) { return; } const d = e && e.closest('#side > details.card'); if (d && !d.open && (!e.closest('summary') || e.matches('.q'))) d.open = true; }, sel);
+    return f(sel, ...a); }; }
   await p.addInitScript(() => { try { localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-film': true})); } catch (e) {} });
   const errs = [], problems = [];
   p.on('pageerror', e => errs.push(String(e))); p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
@@ -55,7 +59,7 @@ const { chromium } = require('playwright');
     want(inView, 'the frame looked at is scrolled into view');
   }
   if (c.film_formats && c.film_formats.length) {
-    await p.selectOption('#s-format', c.film_formats.includes('67') ? '67' : c.film_formats[0]);
+    /* the left cards open one at a time */ await p.evaluate(s => { const d = document.querySelector(s).closest('details.card'); if (d && !d.open) d.open = true; }, '#s-format'); await p.waitForTimeout(150); await p.selectOption('#s-format', c.film_formats.includes('67') ? '67' : c.film_formats[0]);
     await p.waitForTimeout(800);
     out.frameLongIn = (await state()).caps.frame_long_in;
     want(out.frameLongIn > 1.5, 'a 120 format sends its frame length');

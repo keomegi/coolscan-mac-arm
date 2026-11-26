@@ -85,7 +85,7 @@ ${sec('what', 'What to Export', `
 <div class="note" id="x-whatnote"></div>`)}
 ${sec('where', 'Export Location', `
 <label for="x-where">Export to</label><div class="row"><select id="x-where"><option value="folder">Chosen folder</option><option value="edited">The roll's Edited folder</option></select></div>
-<label for="x-dest" data-for="folder">Folder</label><div class="row" data-for="folder"><input type="text" id="x-dest" placeholder="~/Pictures/Coolscan export"><button type="button" id="x-choose">Choose…</button></div>
+<label for="x-dest" data-for="folder">Folder</label><div class="row" data-for="folder"><input type="text" id="x-dest" placeholder="~/Pictures/Coolscan export"><button type="button" id="x-choose">Choose</button></div>
 <span class="lab" data-for="folder"></span><div class="row" data-for="folder"><label class="chk"><input type="checkbox" id="x-subon">Put in subfolder</label><input type="text" id="x-subfolder" aria-label="Subfolder"></div>
 <span class="lab" data-for="folder"></span><div class="row" data-for="folder"><label class="chk"><input type="checkbox" id="x-keep_rolls">Keep the roll folders (Roll 005/…)</label></div>
 <label for="x-existing">Existing files</label><div class="row"><select id="x-existing"><option value="rename">Choose a new name for the exported file</option><option value="skip">Skip</option><option value="replace">Replace without asking</option></select></div>

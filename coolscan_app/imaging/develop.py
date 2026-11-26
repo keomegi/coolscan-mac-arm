@@ -31,7 +31,7 @@ from ..rolls import COLOUR_FILE
 DEVELOP_FOLDER = "Re-developed"
 VIEWS = ("raw", "clean", "film", "final")
 VIEW_WORDS = {"raw": "As scanned", "clean": "Dust removed", "film": "Film correction only",
-              "final": "Dust removed + film correction"}
+              "final": "Finished picture"}
 FILMS = ("negative", "positive", "kodachrome", "mono", "chromo")
 PIECE = (360, 480)   # rows, columns of the piece shown at full size
 FILES_MOST = 500

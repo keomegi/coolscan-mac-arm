@@ -190,13 +190,32 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 #turnbox #b-turnlearnnow{display:none}
 /* an empty description is one line until it is clicked in */
 #desc:placeholder-shown:not(:focus){min-height:30px;height:30px;overflow:hidden}
+/* UI round 2 (2026-11-26): the picture's buttons are a bar above it, as on the Scan page; details fold to one line */
+#stage{padding:12px}
+#pictools{left:0;right:0;top:0;bottom:auto;transform:none;max-width:none;justify-content:flex-start;gap:6px;padding:6px 14px;border-radius:0;
+  border:0;border-bottom:1px solid var(--line);background:var(--panel);box-shadow:none}
+#pictools button,#pictools select{height:28px;padding:0 10px;font-size:13px}
+#pictools button.icon{width:32px;padding:0;font-size:15px}
+#pictools #b-export{margin-left:auto}
+#meta details{border-top:1px solid var(--line2);padding:0}
+#meta details:first-child{margin-top:12px}
+#meta summary{list-style:none;display:flex;align-items:baseline;gap:8px;padding:7px 0;cursor:pointer;user-select:none}
+#meta summary::-webkit-details-marker{display:none}
+#meta summary::before{content:"";width:5px;height:5px;border-right:1.5px solid var(--ink2);border-bottom:1.5px solid var(--ink2);transform:rotate(-45deg);flex:none;align-self:center;margin:0 3px 0 1px}
+#meta details[open]>summary::before{transform:rotate(45deg)}
+#meta summary b{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink2);font-weight:600;flex:none}
+#meta summary .gist{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2);text-align:right;font-size:12px}
+#meta details[open]>summary .gist{visibility:hidden}
+#meta details>dl,#meta details>div{padding:0 0 8px 14px}
+#edit .taken{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+#edit .taken input{width:150px}
 </style></head><body>
 <header id="bar">
 <div class="brand"><h1>Coolscan</h1><nav class="pages" aria-label="Pages"><a href="/">Scan</a><a href="/library" aria-current="page" title="Browse the pictures you have scanned, roll by roll">Scanned pictures</a><a href="/develop" title="Make pictures again from their RAW files, without scanning">Re-develop</a></nav><span id="status" role="status" aria-live="polite">starting…</span></div>
 <div class="tools">
 <button id="b-reload" title="Look at the folders again (R)">Refresh</button>
 <span class="gap"></span>
-<button id="rescanlink" title="Pictures tagged 🎞 to scan again from the film, listed by roll">🎞 Rescan list</button>
+<button id="rescanlink" title="Pictures tagged 🎞 to scan again from the film, listed by roll">🎞 To scan again</button>
 <button class="icon gear" id="b-settings" title="Settings (⌘,)" aria-label="Settings">⚙</button>
 </div>
 </header>
@@ -208,12 +227,12 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <p class="hint" id="norolls" hidden style="padding:0 14px"></p>
 </nav>
 <section id="roll" aria-label="Pictures in the folder">
-<p class="hint" id="pickroll">Pick a folder on the left.</p>
+<p class="hint" id="pickroll">Choose a roll on the left.</p>
 <div id="rollbody" hidden>
 <div class="head"><h2 id="rname"></h2><span class="hint" id="rpath"></span></div>
-<label for="desc" class="hint">Description (saved as Description.txt in the folder)</label>
+<label for="desc" class="hint" title="Saved as Description.txt in the roll's folder">Roll notes</label>
 <textarea id="desc" spellcheck="true" placeholder="Film, camera, where and when, anything worth keeping with the roll"></textarea>
-<div class="descrow"><button id="b-desc" disabled>Save description</button><span id="descmsg" class="hint" role="status"></span></div>
+<div class="descrow"><button id="b-desc" disabled>Save notes</button><span id="descmsg" class="hint" role="status"></span></div>
 <div class="descrow" id="rcamrow"><label for="rcam"><b>Camera</b></label><input type="text" id="rcam" placeholder="e.g. Nikon F3" style="width:220px" title="The camera this film was in. Kept with the roll and written into the pictures' tags, so Lightroom shows it as the camera. The pictures themselves are not changed."><button id="b-rcam" disabled>Save camera</button><span id="rcammsg" class="hint" role="status"></span></div>
 <div class="descrow" id="rdaterow"><label for="rdate"><b>Photo taken, whole roll</b></label><input type="text" id="rdate" placeholder="1988 or 1988-02-06" style="width:150px" title="A year (month, day and time of each scan stay) or a day: 1988-02-06 or 6.2.1988 (pictures one second apart, in order)"><button id="b-rdate">Set for every picture</button><label id="rdateownl" hidden><input type="checkbox" id="rdateown"> also the <span id="rdateownn"></span> with a date of their own</label><span id="rdatemsg" class="hint" role="status"></span></div>
 <p class="hint" id="rdatehelp" style="margin:-10px 0 14px">Sets when the photos were taken for all pictures of this roll, in the app and in the files' tags (the pictures themselves are not changed). One picture different: open it and change <b>Photo taken</b> beside it; it then keeps its own date.</p>
@@ -226,20 +245,20 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <p style="margin:6px 0">Pictures with it on show <b>🎞 film corrected</b> under them. <b>Film correction</b> beside an open picture switches it off or on for that picture, and for several at once tick them and use <b>Film correction</b> in the row of actions. To take it off the whole roll choose <i>Off</i> in the list above. The picture files are never changed: <b>Show original</b> shows a picture as it was saved, and <b>Export</b> makes a copy with the correction in it.</p></details>
 <div class="toolbar" id="filters">
 <label>Stars<select id="f-stars"><option value="0">Any</option><option value="1">★ 1 or more</option><option value="2">★★ 2+</option><option value="3">★★★ 3+</option><option value="4">★★★★ 4+</option><option value="5">★★★★★</option></select></label>
-<label>Flag<select id="f-flag"><option value="">Any</option><option value="pick">Picks</option><option value="notreject">Not rejected</option><option value="reject">Rejected</option><option value="rescan">🎞 Tagged for rescan</option></select></label>
+<label>Flag<select id="f-flag"><option value="">Any</option><option value="pick">Picks</option><option value="notreject">Not rejected</option><option value="reject">Rejected</option><option value="rescan">🎞 Tagged to scan again</option></select></label>
 <label>Tag<select id="f-tag"><option value="">Any</option></select></label>
 <label>Person<select id="f-person"><option value="">Anyone</option></select></label>
 <span class="gap"></span>
 <button id="b-selall" title="Tick every picture shown (A)">Select all</button>
 <button id="b-selnone" hidden>Select none</button>
-<button id="b-exportroll" title="Copies of this whole roll for use elsewhere (Lightroom…): choose pictures or RAW scans, the folder, names, kind of file, size and metadata">Export roll…</button>
+<button id="b-exportroll" title="Copies of this whole roll for use elsewhere (Lightroom…): choose pictures or RAW scans, the folder, names, kind of file, size and metadata">Export roll</button>
 <span class="hint" id="shown"></span>
 </div>
 <div id="actions" hidden aria-label="Change the ticked pictures">
 <div class="arow"><b id="selcount"></b>
 <span class="stars" id="a-stars" aria-label="Stars"></span>
 <button id="a-pick" title="Flag as a pick (P)">⚑ Pick</button><button id="a-reject" title="Flag as rejected (X)">✕ Reject</button><button id="a-unflag" title="No flag (U)">No flag</button>
-<button id="a-redonow" title="Open the Re-develop page with the ticked pictures' RAW files ticked, ready to develop">↻ Re-develop ticked…</button><button id="a-rescan" title="Tag to scan again from the film; listed by roll in the Rescan list">🎞 Tag for rescan</button><button id="a-unredo" title="Take the rescan tag off">Untag rescan</button></div>
+<button id="a-redonow" title="Open the Re-develop page with the ticked pictures' RAW files ticked, ready to develop">↻ Re-develop ticked</button><button id="a-rescan" title="Tag to scan again from the film; listed by roll under “To scan again”">🎞 Tag to scan again</button><button id="a-unredo" title="Take the “scan again” tag off">Untag scan again</button></div>
 <div class="arow"><b>Tags</b><input type="text" id="a-tag" list="alltags" placeholder="tag, another tag" aria-label="Tags to add"><button id="a-addtag">Add</button>
 <select id="a-rmtag" aria-label="Tag to take off"><option value="">Take a tag off…</option></select></div>
 <div class="arow"><b>People</b><input type="text" id="a-person" list="allpeople" placeholder="Name, another name" aria-label="People to add"><button id="a-addperson">Add</button>
@@ -255,7 +274,7 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <button id="a-autoturn" title="Turn each ticked picture the way auto rotate learned from your turns, where it is sure (kept as a setting; the files are not changed)">Auto rotate</button>
 <button id="a-reset" title="Take the crop and turn off">Reset crop &amp; turn</button></div>
 <div class="arow"><b>Film correction</b><button id="a-rollcol" title="Show the ticked pictures with this roll's film correction (kept as a setting; the files are not changed)">On</button><button id="a-own" title="Show the ticked pictures without the film correction, as they were saved">Off</button></div>
-<div class="arow"><b>Export</b><button id="a-exportdlg" title="Copies of the ticked pictures for use elsewhere, with their crop, turn and colour put in: choose the folder, names, kind of file, size and metadata">Export…</button><button id="a-exportprev" title="Export the ticked pictures again with the settings used last time, without the dialog">Export with previous</button></div>
+<div class="arow"><b>Export</b><button id="a-exportdlg" title="Copies of the ticked pictures for use elsewhere, with their crop, turn and colour put in: choose the folder, names, kind of file, size and metadata">Export</button><button id="a-exportprev" title="Export the ticked pictures again with the settings used last time, without the dialog">Export with previous</button></div>
 <div class="arow"><b>Files</b><button id="a-finder">Show in Finder</button><button id="a-lr">Open in Lightroom</button>
 </div>
 <div id="actmsg" class="hint" role="status"></div>
@@ -269,7 +288,7 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 
 <div id="rescanview" hidden role="dialog" aria-modal="true" aria-labelledby="rstitle">
 <header><h2 id="rstitle">🎞 Pictures to scan again</h2><span class="hint" id="rsmsg" role="status" aria-live="polite"></span>
-<span class="gap" style="flex:1"></span><button id="rs-copy">Copy list</button><button id="rs-print">Print…</button><button id="rs-close">Close</button></header>
+<span class="gap" style="flex:1"></span><button id="rs-copy">Copy list</button><button id="rs-print">Print</button><button id="rs-close">Close</button></header>
 <div id="rsbody"></div></div>
 <div id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="vtitle">
 <div id="vbar">
@@ -289,8 +308,8 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <button id="b-orig" hidden title="Switch between your edited copy and the picture as it was saved (O)">Show original</button>
 <span id="origtag" hidden></span>
 <span class="sep" id="sep1" hidden></span>
-<button id="b-turnl" title="Turn a quarter to the left (kept as a setting; the file is not changed)">⟲ Left</button>
-<button id="b-turnr" title="Turn a quarter to the right (kept as a setting; the file is not changed)">Right ⟳</button>
+<button class="icon" id="b-turnl" aria-label="Turn left" title="Turn a quarter to the left (kept as a setting; the file is not changed)">⟲</button>
+<button class="icon" id="b-turnr" aria-label="Turn right" title="Turn a quarter to the right (kept as a setting; the file is not changed)">⟳</button>
 <span class="sep"></span>
 <button id="b-crop" aria-pressed="false" title="Crop: the box starts where auto crop puts it; drag its sides and corners, then Done (C)">Crop</button>
 <select id="shape" aria-label="Crop shape" hidden><option value="0">Free</option><option value="1.5">3:2</option><option value="1.3333">4:3</option><option value="1.25">5:4</option><option value="1">Square</option></select>
@@ -300,7 +319,7 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 <button id="b-base" hidden aria-pressed="false" title="Show the frame as scanned and click on the clear film between or beside the pictures. The film base is kept with the roll; you then choose this picture or the whole roll (B)">Film base</button>
 <button id="b-own" hidden aria-pressed="false" title="This roll's film correction on this picture: on or off (kept as a setting; the file is not changed)">Film correction</button>
 <button id="b-reset" hidden title="Take the crop and turn off">Reset</button>
-<button id="b-export" title="A copy of this picture for use elsewhere, with its crop, turn and colour put in: choose the folder, name, kind of file, size and metadata">Export…</button>
+<button id="b-export" title="A copy of this picture for use elsewhere, with its crop, turn and colour put in: choose the folder, name, kind of file, size and metadata">Export</button>
 </div></div>
 <div id="strip" role="list" aria-label="Pictures in this folder"></div>
 <aside id="info" aria-label="About this picture"><p class="hint" id="cropmsg" role="status"></p>

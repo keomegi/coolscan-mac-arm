@@ -6,6 +6,10 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const p = await ctx.newPage();
+  // the left cards open one at a time: a control in a closed card is reached by opening its card first
+  for (const m of ['click', 'selectOption', 'fill', 'check', 'uncheck']) { const f = p[m].bind(p); p[m] = async (sel, ...a) => {
+    if (typeof sel === 'string') await p.evaluate(s => { let e = null; try { e = document.querySelector(s); } catch (x) { return; } const d = e && e.closest('#side > details.card'); if (d && !d.open && (!e.closest('summary') || e.matches('.q'))) d.open = true; }, sel);
+    return f(sel, ...a); }; }
   // the Scan quality and Save as boxes start folded since 2026-11-23: open them, as they were when this script was written
   await p.addInitScript(() => { try { if (!localStorage.getItem('coolscan.cards')) localStorage.setItem('coolscan.cards', JSON.stringify({'g-scan': true, 'g-save': true})); } catch (e) {} });
   const errs = [];
@@ -85,7 +89,7 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   out.presetEmpty = await p.$eval('#preset', e => e.options[e.selectedIndex].textContent);
   await p.click('#b-presetnew'); await p.fill('#presetname', 'Quick look'); await p.click('#b-presetsave');
   await p.waitForFunction(() => document.getElementById('preset').value === 'Quick look');
-  await p.selectOption('#s-dpi', '2900'); await p.check('#s-archive', { force: true });
+  /* the left cards open one at a time */ await p.evaluate(s => { const d = document.querySelector(s).closest('details.card'); if (d && !d.open) d.open = true; }, '#s-dpi'); await p.waitForTimeout(150); await p.selectOption('#s-dpi', '2900'); await p.check('#s-archive', { force: true });
   await p.waitForFunction(() => document.getElementById('preset').value === '');
   out.presetChanged = await p.$eval('#preset', e => e.options[e.selectedIndex].textContent);
   await p.click('#b-presetnew'); out.presetPrefill = await p.inputValue('#presetname'); await p.fill('#presetname', 'Archive 2900'); await p.keyboard.press('Enter');

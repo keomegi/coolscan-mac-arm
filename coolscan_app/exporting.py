@@ -480,7 +480,7 @@ class ExportMixin:
                 return "Choose the folder to export to first."
             dest = Path(os.path.expanduser(o["dest"]))
             if not dest.is_absolute():
-                return "Give the whole path of the folder to export to (or use Choose…)."
+                return "Give the whole path of the folder to export to (or use Choose)."
             if dest.exists() and not dest.is_dir():
                 return f"{self._short_path(dest)} is a file, not a folder."
             if not dest.exists() and not dest.parent.is_dir():
@@ -778,7 +778,7 @@ class ExportMixin:
         """Export with the options used last time, without the dialog."""
         last = self._export_saved()["last"]
         if not last:
-            return {"ok": False, "error": "Nothing has been exported yet. Use Export… first."}
+            return {"ok": False, "error": "Nothing has been exported yet. Use Export first."}
         return self.library_export_start(key, files, last, items)
 
     def library_export_status(self):

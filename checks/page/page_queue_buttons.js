@@ -45,10 +45,10 @@ const [port, shotDir] = process.argv.slice(2);
   out.added = { queue: await queue(), ticked: await tickedNow() };
   check('Add to scan puts both at the end', out.added.queue.slice(-2).join() === '4:waiting,5:waiting', out.added.queue);
   check('ticks taken off after Add', out.added.ticked.length === 0);
-  // 5 Take out of scan
+  // 5 Remove from scan
   await p.check('.tile[data-i="4"] input'); await p.waitForTimeout(400);
   out.outText = await txt('b-qout');
-  check('the button says what it takes out', out.outText === 'Take 1 out of scan', out.outText);
+  check('the button says what it takes out', out.outText === 'Remove 1 from scan', out.outText);
   await p.click('#b-qout'); await p.waitForTimeout(900);
   out.removed = { queue: await queue(), ticked: await tickedNow() };
   check('frame 5 taken out', !out.removed.queue.some(q => q.startsWith('5:')), out.removed.queue);

@@ -58,7 +58,7 @@ async function loadRolls() {
   if (r.error === 'not found') { $('status').textContent = 'The app is older than this page. Quit it and open it again.'; return; }
   rolls = r.rolls || [];
   $('base').textContent = r.base || '';
-  $('status').textContent = rolls.length + ' folder' + (rolls.length === 1 ? '' : 's');
+  $('status').textContent = rolls.length + ' roll' + (rolls.length === 1 ? '' : 's');
   $('norolls').hidden = !!rolls.length;
   $('norolls').textContent = r.missing ? 'The scans folder is not there yet.' : 'No scans in this folder yet.';
   const ul = $('rolllist');
@@ -68,7 +68,7 @@ async function loadRolls() {
     b.dataset.key = it.key;
     const nm = el('span', 'rname', it.name);
     if (it.current) nm.appendChild(el('span', 'rtag', 'scanning into'));
-    if (it.rescan) { const t = el('span', 'rtag', '🎞 ' + it.rescan); t.title = it.rescan + ' tagged for rescan'; nm.appendChild(t); }
+    if (it.rescan) { const t = el('span', 'rtag', '🎞 ' + it.rescan); t.title = it.rescan + ' to scan again'; nm.appendChild(t); }
     b.appendChild(nm);
     const dates = it.first ? (it.first === it.last ? it.first : it.first + ' – ' + it.last) : '';
     b.appendChild(el('span', 'rsub', it.count + ' picture' + (it.count === 1 ? '' : 's') + (it.raw ? ' · RAW' : '') + (dates ? ' · ' + dates : '')));
@@ -78,7 +78,7 @@ async function loadRolls() {
   }
   markRoll();
   const rescans = rolls.reduce((n, it) => n + (it.rescan || 0), 0);
-  $('rescanlink').textContent = rescans ? '🎞 Rescan list (' + rescans + ')' : '🎞 Rescan list';
+  $('rescanlink').textContent = rescans ? '🎞 To scan again (' + rescans + ')' : '🎞 To scan again';
   getJSON('/api/library/tags').then(t => {
     for (const [list, values] of [['alltags', t.tags], ['allpeople', t.people]]) {
       const dl = $(list); dl.textContent = '';
@@ -185,7 +185,7 @@ function drawGrid() {
     const rate = el('span', 'rate', starText(p.stars));
     if (p.flag === 'pick') rate.appendChild(el('span', 'fl', '⚑ pick'));
     if (p.flag === 'reject') rate.appendChild(el('span', 'rj', '✕ rejected'));
-    if (p.rescan) rate.appendChild(el('span', 'rs', '🎞 rescan'));
+    if (p.rescan) rate.appendChild(el('span', 'rs', '🎞 scan again'));
     if (p.edit) { const e = el('span', 'ed', '✂ edited'); e.title = 'Shown with your crop and turn. The file itself is unchanged; Export makes a copy with them.'; rate.appendChild(e); }
     if (p.film) { const e = el('span', 'fm', '🎞 film corrected'); e.title = 'Shown with this roll\'s film correction. The file itself is unchanged; Export makes a copy with it.'; rate.appendChild(e); }
     b.appendChild(rate);
@@ -251,8 +251,8 @@ async function edit(pics, change, msgBox) {
   await refresh();
   const s = n > 1 ? 's' : '';
   if ('rescan' in change && Object.keys(change).length === 1)
-    say(msgBox, change.rescan ? n + ' picture' + s + ' tagged for rescan. The Rescan list at the top shows them by roll.'
-      : 'Rescan tag taken off ' + n + ' picture' + s + '.', 'ok');
+    say(msgBox, change.rescan ? n + ' picture' + s + ' tagged to scan again. “To scan again” at the top lists them by roll.'
+      : '“Scan again” taken off ' + n + ' picture' + s + '.', 'ok');
   else if (problems.length) say(msgBox, 'Saved for ' + n + ' picture' + (n > 1 ? 's' : '') + '. In the app\'s list only (not in the file): ' + problems.join('; '), 'warn');
   else say(msgBox, 'Saved for ' + n + ' picture' + (n > 1 ? 's' : '') + ', in the app and in the files.', 'ok');
   return true;
@@ -308,7 +308,7 @@ $('a-redonow').onclick = async () => {
   const noRaw = sel.filter(p => !p.raw);
   if (noRaw.length === sel.length) {
     say('actmsg', 'None of the ticked pictures has a RAW file (only Archive mode keeps one), so they cannot be developed again. ', 'warn');
-    const b = el('button', null, '🎞 Tag ' + (sel.length > 1 ? 'them' : 'it') + ' for rescan');
+    const b = el('button', null, '🎞 Tag ' + (sel.length > 1 ? 'them' : 'it') + ' to scan again');
     b.onclick = () => edit(sel, {rescan: true});
     $('actmsg').appendChild(b);
     return;
@@ -338,7 +338,7 @@ async function openRescan() {
   rescanData = r.ok ? r : {rolls: [], total: 0};
   const body = $('rsbody'); body.textContent = '';
   say('rsmsg', rescanData.total ? rescanData.total + ' picture' + (rescanData.total > 1 ? 's' : '') + ' in ' + rescanData.rolls.length + ' roll' + (rescanData.rolls.length > 1 ? 's' : '')
-    : 'Nothing is tagged for rescan. Tag pictures with 🎞 Rescan in the picture view (S), or tick them and press 🎞 Tag for rescan.');
+    : 'Nothing is tagged to scan again. Tag pictures with 🎞 Scan again in the picture view (S), or tick them and tag them from the list.');
   for (const r of rescanData.rolls) {
     const sec = el('section');
     sec.appendChild(el('h3', null, r.name + ' · ' + r.pictures.length + ' picture' + (r.pictures.length > 1 ? 's' : '')));
@@ -670,8 +670,8 @@ function drawViewerMarks() {
     b.onclick = () => edit([p], {flag: p.flag === f ? null : f}, 'cropmsg');
     flags.appendChild(b);
   }
-  const rs = el('button', null, '🎞 Rescan'); rs.setAttribute('aria-pressed', String(!!p.rescan));
-  rs.title = 'Tag to scan again from the film; listed by roll in the Rescan list (S)';
+  const rs = el('button', null, '🎞 Scan again'); rs.setAttribute('aria-pressed', String(!!p.rescan));
+  rs.title = 'Tag to scan again from the film; listed by roll under “To scan again” (S)';
   rs.onclick = () => edit([p], {rescan: !p.rescan}, 'cropmsg');
   flags.appendChild(rs);
   r1.appendChild(flags); box.appendChild(r1);
@@ -680,11 +680,18 @@ function drawViewerMarks() {
   box.appendChild(cap);
   chips(box, p, 'people', 'People ');
   chips(box, p, 'tags', 'Tags ');
-  const r3 = el('div', 'erow');
-  r3.appendChild(el('span', 'hint', 'Photo taken '));
-  const d = el('input'); d.type = 'datetime-local'; d.step = 1; d.value = (p.taken || '').replace(' ', 'T');
+  const r3 = el('div', 'erow taken');
+  r3.appendChild(el('span', 'hint', 'Photo taken'));
+  const d = el('input'); d.type = 'text'; d.value = p.taken || ''; d.placeholder = '1988 or 1988-02-06';
+  d.title = 'A year (the month, day and time stay), a day (1988-02-06 or 6.2.1988), or a day and time (1988-02-06 14:30)';
   d.setAttribute('aria-label', 'Photo taken');
-  d.onchange = () => { if (d.value) edit([p], {date: {how: 'exact', value: d.value}}, 'cropmsg'); };
+  d.onchange = () => {
+    const text = d.value.trim(); if (!text) return;
+    const full = /^(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d(?::\d\d)?)$/.exec(text);
+    const got = full ? {how: 'exact', value: full[1] + 'T' + full[2]} : readRollDate(text);
+    if (!got) { say('cropmsg', 'Photo taken: type a year (1988), a day (1988-02-06 or 6.2.1988) or a day and time (1988-02-06 14:30).', 'warn'); return; }
+    edit([p], {date: {how: got.how, value: got.value}}, 'cropmsg');
+  };
   r3.appendChild(d);
   const note = el('input'); note.type = 'text'; note.placeholder = 'Date note (about 1988?)'; note.value = p.date_note || '';
   note.setAttribute('aria-label', 'Date note'); note.style.marginTop = '4px';
@@ -713,10 +720,27 @@ function row(dl, label, value) {
   if (value instanceof Node) dd.appendChild(value); else dd.textContent = value;
   dl.appendChild(dd);
 }
+let openParts = null;
+function partsOpen() {
+  if (!openParts) { try { openParts = JSON.parse(localStorage.getItem('coolscan-picture-parts') || 'null'); } catch (e) { openParts = null; } }
+  if (!openParts || typeof openParts !== 'object') openParts = {Versions: true};
+  return openParts;
+}
 function section(title) {
-  const box = $('meta');
-  box.appendChild(el('h3', null, title));
-  const dl = el('dl'); box.appendChild(dl); return dl;
+  const box = $('meta'), key = title.replace(/ \(.*/, '');
+  const d = el('details'), s = el('summary');
+  s.appendChild(el('b', null, title)); s.appendChild(el('span', 'gist'));
+  d.appendChild(s); d.open = !!partsOpen()[key];
+  d.addEventListener('toggle', () => { partsOpen()[key] = d.open; try { localStorage.setItem('coolscan-picture-parts', JSON.stringify(openParts)); } catch (e) { /* not kept */ } });
+  const dl = el('dl'); d.appendChild(dl); box.appendChild(d); return dl;
+}
+// the one line a folded part shows: its first few values
+function gists() {
+  for (const d of $('meta').querySelectorAll('details')) {
+    const said = [...d.querySelectorAll('dd')].filter(x => !x.querySelector('button')).slice(0, 3).map(x => x.textContent.trim()).filter(Boolean);
+    const n = d.querySelectorAll('dd button').length;
+    d.querySelector('.gist').textContent = said.join(' · ') || (n ? n + ' files' : '');
+  }
 }
 function drawInfo(r) {
   const box = $('meta');
@@ -775,6 +799,7 @@ function drawInfo(r) {
     }
     row(dl, '', list);
   }
+  gists();
 }
 function versionsOf(p, raw) {
   const out = [[p.file, p.file + ' (the picture)']];
@@ -944,13 +969,13 @@ $('imgwrap').addEventListener('pointerup', () => {
   drag = null; grab = null; $('loupe').hidden = true;
   for (const g of document.querySelectorAll('#imgwrap .kc-g.on')) g.classList.remove('on');
 });
-// the picture is kept clear of the bar of buttons under it: as tall as the space above the bar allows
+// the picture is kept clear of the bar of buttons above it: as tall as the space under the bar allows
 function fitStage() {
   const st = $('stage'), bar = $('pictools');
   if (!st || $('viewer').hidden) return;
-  const room = bar.offsetHeight + 22 + (cropping && advanced ? 26 : 0);
-  st.style.paddingBottom = room + 'px';
-  const h = Math.max(120, st.clientHeight - room - 14) + 'px';
+  const top = bar.offsetHeight + 12, bottom = 12 + (cropping && advanced ? 26 : 0);
+  st.style.paddingTop = top + 'px'; st.style.paddingBottom = bottom + 'px';
+  const h = Math.max(120, st.clientHeight - top - bottom - 2) + 'px';
   $('big').style.maxHeight = h; $('big2').style.maxHeight = h;
   if (cropping) drawBox();
 }

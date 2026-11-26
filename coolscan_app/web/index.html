@@ -2,23 +2,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan</title>
 <link rel="stylesheet" href="/style.css"></head><body class="main">
 <header id="bar">
-<div class="brand"><h1>Coolscan</h1><nav class="pages" aria-label="Pages"><a href="/" aria-current="page">Scan</a><a href="/library" title="Browse the pictures you have scanned, roll by roll">Scanned pictures</a><a href="/develop" title="Make pictures again from their RAW files, without scanning">Re-develop</a></nav><span id="status" role="status" aria-live="polite">starting…</span></div>
-<label class="archtoggle" id="archtoggle" title="Archive mode: each frame is saved twice from one pass, as RAW (the untouched scan with its infrared) and as Positive (the finished picture)"><input type="checkbox" id="s-archive" role="switch"><span class="sw" aria-hidden="true"></span><span class="txt"><b>Archive mode</b><small id="archsub">RAW + Positive</small></span></label><button class="infobtn" id="b-archinfo" aria-label="What Archive mode does" title="What Archive mode does">i</button>
-<div class="tools" role="toolbar" aria-label="Scanner">
-<div class="quiet" role="group" aria-label="Scanner and film">
+<div class="brand"><h1>Coolscan</h1><nav class="pages" aria-label="Pages"><a href="/" aria-current="page">Scan</a><a href="/library" title="Browse the pictures you have scanned, roll by roll">Scanned pictures</a><a href="/develop" title="Make pictures again from their RAW files, without scanning">Re-develop</a></nav></div>
+<div class="quiet" id="scanpill" role="group" aria-label="Scanner and film">
+<span class="dot" id="scandot" aria-hidden="true"></span><span id="status" role="status" aria-live="polite">starting…</span>
 <button id="b-connect" title="Connect to the scanner again">Connect</button>
 <button id="b-load" title="Take in a strip that is waiting at the slot">Load</button>
 <button id="b-eject" title="Eject the film">Eject</button>
 </div>
-<span class="gap"></span>
-<button id="b-thumb" title="One quick pass over the strip to find the frames (T)">Thumbnail</button>
+<label class="archtoggle" id="archtoggle" title="Archive mode: each frame is saved twice from one pass, as RAW (the untouched scan with its infrared) and as Positive (the finished picture)"><input type="checkbox" id="s-archive" role="switch"><span class="sw" aria-hidden="true"></span><span class="txt"><b>Archive mode</b><small id="archsub">RAW + Positive</small></span></label><button class="infobtn" id="b-archinfo" aria-label="What Archive mode does" title="What Archive mode does">i</button>
+<div class="tools" role="toolbar" aria-label="Scanner">
+<button id="b-thumb" title="One quick pass over the strip to find the frames (T)">Find frames</button>
 <button id="b-preview" title="A quick, sharper look than the thumbnail (P)">Preview</button>
 <button class="primary" id="b-scan" title="Scan and save (⌘ Return)">Scan all frames</button>
 <button id="b-stop" disabled title="Stop after the current step">Stop</button>
 <span class="gap"></span>
 <button class="icon gear" id="b-settings" title="Settings (⌘,)" aria-label="Settings">⚙</button>
 </div>
-<div id="setline" aria-label="Settings of the scan"><span class="lbl" id="setlbl">Next scan</span><span id="setchips"></span></div>
+<div id="setline" hidden aria-label="Settings of the scan"><span class="lbl" id="setlbl">Next scan</span><span id="setchips"></span></div>
 <div id="actline">
 <div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span><span id="timing"></span></div>
 <span id="lastline" title="The latest line of the Activity list"></span>
@@ -32,7 +32,7 @@
 
 <details class="card" id="g-presets"><summary>Saved settings<span class="sum" id="sum-presets"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <label class="row"><span>Use</span><select id="preset" aria-label="Saved settings"></select></label>
-<div class="btnrow"><button id="b-presetnew">Save as…</button><button id="b-presetdel">Delete</button></div>
+<div class="btnrow"><button id="b-presetnew">Save as</button><button id="b-presetdel">Delete</button></div>
 <div class="inline" id="presetnew" hidden><input type="text" id="presetname" maxlength="60" placeholder="Name, e.g. Portra archive" aria-label="Name for these settings"><button class="primary" id="b-presetsave">Save</button><button id="b-presetcancel">Cancel</button></div>
 <div class="inline" id="presetdel" hidden><span id="presetdelmsg"></span><button id="b-presetdelyes">Delete</button><button id="b-presetdelno">Cancel</button></div>
 <p class="hint" id="presetmsg" hidden></p>
@@ -66,12 +66,12 @@
 </div></details>
 
 <details class="card" id="g-roll" open><summary>Roll<span class="sum" id="sum-roll"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
-<div class="inline"><select id="rollpick" class="grow" aria-label="Roll" title="The roll you are scanning. Pick another one to carry on in it."></select><button id="b-newroll">New roll…</button></div>
+<div class="inline"><select id="rollpick" class="grow" aria-label="Roll" title="The roll you are scanning. Pick another one to carry on in it."></select><button id="b-newroll">New roll</button></div>
 <p class="hint" id="rollfilm"></p><p class="hint warn" id="rollpickmsg" hidden></p>
 <label class="row"><span>Roll number</span><span><input type="number" id="rollno" min="1" max="999"> <button id="b-rollno">Change</button></span></label>
 <div id="rollnodlg" hidden><p class="hint warn" id="rollnomsg"></p>
 <div class="btnrow"><button id="b-rollnoyes" hidden>Move them and renumber</button><button id="b-rollnono">Cancel</button></div></div>
-<label for="rolldesc">Film description</label>
+<label for="rolldesc">Roll notes</label>
 <textarea id="rolldesc" placeholder="Anything about this film: camera, place, dates, people…"></textarea>
 <p class="help">One folder per roll; each strip adds to it, numbering on. Pick a roll in the list to carry on in it. The description is saved as Description.txt in the roll folder. Changing the roll number renames the folder and the R… part of its file names; nothing is deleted.</p>
 </div></details>
@@ -98,7 +98,7 @@
 <label class="row" id="negrow"><span>Negatives as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
-<label for="s-outdir" class="above">Folder</label><div class="inline"><input type="text" id="s-outdir" class="grow" spellcheck="false"><button id="b-choosefolder" title="Pick the folder in a Finder window">Choose…</button></div>
+<label for="s-outdir" class="above">Folder</label><div class="inline"><input type="text" id="s-outdir" class="grow" spellcheck="false"><button id="b-choosefolder" title="Pick the folder in a Finder window">Choose</button></div>
 <p class="hint warn" id="foldermsg" hidden></p>
 <label class="row"><span>Make a folder for each roll</span><input type="checkbox" id="s-use_roll"></label>
 <p class="hint" id="savewhere"></p>
@@ -121,14 +121,14 @@
 <div id="work">
 <section id="frames" aria-label="Frames">
 <div class="head"><h2>Frames</h2><span class="hint" id="framesum"></span><span class="grow"></span>
-<span id="qbtns" hidden><button id="b-qadd" title="Put the ticked frames at the end of the scan that is running">Add to scan</button><button id="b-qout" title="Take the ticked frames that are still waiting out of the scan that is running">Take out of scan</button></span>
+<span id="qbtns" hidden><button id="b-qadd" title="Put the ticked frames at the end of the scan that is running">Add to scan</button><button id="b-qout" title="Take the ticked frames that are still waiting out of the scan that is running">Remove from scan</button></span>
 <button id="b-all" title="Tick every frame (⌘A)">Select all</button><button id="b-none" title="Untick every frame (Esc)">Select none</button></div>
-<div id="filmwarn" hidden><span id="filmwarntext"></span><button class="small atbtn ok" id="b-filmnew" title="Start a new roll folder for this film; the next frames go into it">New roll…</button><button class="small atbtn no" id="b-filmsame" title="It is the same film as the rest of the roll">Same film</button><button class="small atbtn no" id="b-filmown" title="Stay in this roll, but keep this strip on its own colour and out of the roll's measurements">Keep in this roll, own colour</button></div>
+<div id="filmwarn" hidden><span id="filmwarntext"></span><button class="small atbtn ok" id="b-filmnew" title="Start a new roll folder for this film; the next frames go into it">New roll</button><button class="small atbtn no" id="b-filmsame" title="It is the same film as the rest of the roll">Same film</button><button class="small atbtn no" id="b-filmown" title="Stay in this roll, but keep this strip on its own colour and out of the roll's measurements">Keep in this roll, own colour</button></div>
 <div id="stripturn" hidden><span id="stripturntext"></span><button class="small atbtn ok" id="b-stripok" title="Yes: keep the frames as they are now. Not asked again for this roll unless a strip comes out the other way round">✓ Accept</button><button class="small atbtn no" id="b-stripno" title="No: turn every frame 180°. Remembered for this roll">✕ Reject</button></div>
 <div id="queue" hidden><span class="lbl">Queue</span><span id="qitems"></span></div>
 <div id="tiles" role="listbox" aria-label="Frames on this strip" aria-multiselectable="true"></div>
 <div id="longnav" hidden><button class="small" id="b-longl" title="Scroll back along the strip" aria-label="Earlier frames">◀</button><span class="hint" id="longpos"></span><button class="small" id="b-longr" title="Scroll on along the strip" aria-label="Later frames">▶</button></div>
-<p class="hint" id="noframes">No frames yet. Feed a strip in and the app finds them, or press Thumbnail.</p>
+<p class="hint" id="noframes">No frames yet. Feed a strip in and the app finds them, or press Find frames.</p>
 </section>
 
 <section id="viewer" aria-label="Preview">
@@ -150,7 +150,7 @@
 <p class="hint" id="vempty">Click a frame to see it here.</p></div>
 <p class="hint" id="vsaved" hidden></p>
 <p class="hint" id="vturn" hidden><span id="vturntext"></span> <button class="small" id="b-turnhint">Turn it</button></p>
-<div id="viewfoot"><button class="small" id="b-framesets" title="Give the frame you are looking at settings of its own (S)">Settings for this frame…</button><span class="grow"></span><button class="small" id="b-keys" title="Keyboard shortcuts (?)">Keyboard shortcuts</button></div>
+<div id="viewfoot"><button class="small" id="b-framesets" title="Give the frame you are looking at settings of its own (S)">Settings for this frame</button><span class="grow"></span><button class="small" id="b-keys" title="Keyboard shortcuts (?)">Keyboard shortcuts</button></div>
 </section>
 
 </div>
@@ -163,7 +163,7 @@
 <label class="row"><span>ISO</span><input type="text" id="r-film_iso" placeholder="e.g. 400"></label>
 <label class="row"><span>Notes</span><input type="text" id="r-film_notes" placeholder="e.g. Summer 2005"></label>
 <label class="row"><span>Camera</span><input type="text" id="r-film_camera" placeholder="e.g. Nikon F3" title="The camera the film was in. Kept with the roll and written into the pictures, so Lightroom shows it as the camera. It can be changed later in Scanned pictures."></label>
-<label for="r-film_description">Film description</label>
+<label for="r-film_description">Roll notes</label>
 <textarea id="r-film_description" placeholder="Optional. Saved as Description.txt in the new roll's folder."></textarea>
 <p class="hint warn" id="rolldlgmsg" hidden></p>
 <div class="btnrow"><button id="b-rollcancel">Cancel</button><button class="primary" id="b-rollok">Start new roll</button></div>
@@ -197,7 +197,7 @@
 <tr><td><kbd>Space</kbd></td><td>Enlarge the picture (Space again closes it)</td></tr>
 <tr><td><kbd>C</kbd></td><td>Crop; hold <kbd>Shift</kbd> while dragging to keep the crop's shape</td></tr>
 <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>Turn 90° left / right</td></tr>
-<tr><td><kbd>T</kbd> / <kbd>P</kbd></td><td>Thumbnail / Preview</td></tr>
+<tr><td><kbd>T</kbd> / <kbd>P</kbd></td><td>Find frames / Preview</td></tr>
 <tr><td><kbd>⌘ Return</kbd></td><td>Scan</td></tr>
 <tr><td><kbd>S</kbd></td><td>Settings for the frame you are looking at</td></tr>
 <tr><td><kbd>A</kbd></td><td>Show or hide the Activity list</td></tr>
@@ -206,11 +206,11 @@
 <div class="btnrow"><button class="primary" id="b-keysok">Done</button></div>
 </dialog>
 <dialog id="framedlg" aria-labelledby="framedlgtitle"><h2 id="framedlgtitle">Settings for this frame</h2>
-<p class="hint">Pick a value to scan this frame with it. "Same as all frames" follows the settings on the left, so a change there still reaches this frame.</p>
+<p class="hint">Each row shows what all frames are scanned with. Press Change to give this frame a value of its own; the rest keeps following the settings on the left.</p>
 <div id="fsrows"></div>
 <p class="hint" id="fs-when" hidden></p>
 <label class="check" id="fs-alsorow" hidden><input type="checkbox" id="fs-also"> <span id="fs-alsotext">Also for the other ticked frames</span></label>
-<div class="btnrow"><button id="fs-reset">Same as all frames again</button><button class="primary" id="fs-done">Done</button></div>
+<div class="btnrow"><button id="fs-reset">Reset this frame</button><button class="primary" id="fs-done">Done</button></div>
 </dialog>
 <dialog id="setdlg" aria-labelledby="setdlgtitle"><div class="dlghead"><h2 id="setdlgtitle">Settings</h2><span class="grow"></span><button class="primary" id="b-setdone">Done</button></div>
 <span id="sum-done" hidden></span><span id="sum-extra" hidden></span>
@@ -227,7 +227,7 @@
 <div class="sub">Thumbnail</div>
 <p class="what">One fast, low-resolution pass over the whole strip. It finds the frames and gives each its small picture. Nothing is saved.</p>
 <label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
-<p class="help">Ticked: the thumbnail pass runs by itself when a strip goes in. Unticked: press Thumbnail when you want it.</p>
+<p class="help">Ticked: the thumbnail pass runs by itself when a strip goes in. Unticked: press Find frames when you want it.</p>
 <div class="sub">Preview</div>
 <p class="what">A quick scan of one frame, sharper than the thumbnail, to judge focus, colour and crop before the real scan. Nothing is saved.</p>
 <label class="row"><span>Preview every frame when film goes in</span><input type="checkbox" id="s-auto_preview"></label>

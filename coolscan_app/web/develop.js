@@ -53,12 +53,14 @@ $('files').addEventListener('click', ev => {
 });
 function drawFiles() {
   const D = dev(), sig = JSON.stringify(D.files) + D.current + [...ticked].join('|');
-  $('filetable').hidden = !D.files.length;
+  $('filetable').hidden = !D.files.length; $('nofiles').hidden = !!D.files.length;
+  $('filesum').textContent = !D.files.length ? '' : ticked.size ? ticked.size + ' of ' + D.files.length + ' ticked' : D.files.length + ' file' + (D.files.length > 1 ? 's' : '') + ' · none ticked, so all are developed';
   if (sig === shownFiles) return;
   shownFiles = sig;
   const body = $('files'); body.innerHTML = '';
   for (const f of D.files) {
     const tr = document.createElement('tr'); tr.dataset.name = f.name; if (f.name === D.current) tr.className = 'cur';
+    tr.title = f.size[0] + ' × ' + f.size[1] + ' pixels' + (f.dpi ? ', ' + f.dpi + ' dpi' : '');
     const cell = (text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text; tr.appendChild(td); return td; };
     const t = cell('', 'x'), box = document.createElement('input'); box.type = 'checkbox'; box.checked = ticked.has(f.name);
     box.setAttribute('aria-label', 'Develop ' + f.name); t.appendChild(box);
@@ -94,6 +96,10 @@ function fillForm() {
   const kodachrome = D.how.film === 'kodachrome' || (!D.how.film && (D.files || []).some(f => f.film === 'kodachrome'));
   $('kchint').hidden = !(D.how.clean && kodachrome);
   $('extras').checked = D.extras;
+  const words = id => { const e = $(id), o = e.options[e.selectedIndex]; return o ? o.textContent : ''; };
+  $('dsum-files').textContent = D.folder ? D.folder.replace(/\/+$/, '').split('/').slice(-2).join(' / ') : 'none chosen';
+  $('dsum-how').textContent = [words('h-film'), D.how.clean ? 'dust removed' : 'no dust removal'].join(' · ');
+  $('dsum-save').textContent = D.extras ? 'with the in-between steps' : 'a new folder each run';
 }
 for (const k of ['film', 'film_profile', 'tone', 'colour_space', 'restore', 'grain', 'dust_method'])
   $('h-' + k).onchange = () => set({how: {[k]: ['restore', 'grain'].includes(k) ? +$('h-' + k).value : $('h-' + k).value}});
@@ -182,7 +188,7 @@ function render() {
   const D = dev(), busy = !!S.dev_job;
   $('status').textContent = (S.demo ? 'DEMO · ' : '') + (D.folder ? D.folder : 'no folder picked yet');
   const n = ticked.size;
-  $('b-run').textContent = n ? 'Develop ' + n + ' ticked file' + (n > 1 ? 's' : '') : 'Develop all files';
+  $('b-run').textContent = n ? 'Develop ' + n + ' selected' : D.files.length ? 'Develop ' + D.files.length + ' file' + (D.files.length > 1 ? 's' : '') : 'Develop';
   $('b-run').disabled = busy || !D.files.length;
   $('b-look').disabled = S.dev_job === 're-develop';
   $('b-stop').disabled = !(S.dev_job === 're-develop' || S.dev_job === 're-develop preview');
