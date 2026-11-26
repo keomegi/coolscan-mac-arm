@@ -5,6 +5,8 @@ import sys
 import threading
 import time
 import urllib.request
+import os, tempfile
+os.environ.setdefault("COOLSCAN_LEARN_DIR", tempfile.mkdtemp(prefix="coolscan-learn-"))   # learning: never the person's own
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 

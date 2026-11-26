@@ -4,7 +4,8 @@
 #   mac/build_app.sh                 puts it in ~/Applications (Launchpad and Spotlight find it there)
 #   mac/build_app.sh /Applications   or anywhere else you like
 #
-# The app runs this folder's coolscan.py with this folder's .venv, so build it again if you move
+# The app runs this folder's coolscan.py with this folder's .venv (made by setup.sh, which this
+# script runs for you if .venv is missing), so build it again if you move
 # the folder. Changes to the Python files or the page need no new build, only a restart of the app.
 # Needs the Xcode Command Line Tools (for swiftc):  xcode-select --install
 set -euo pipefail
@@ -18,7 +19,8 @@ if ! command -v swiftc >/dev/null 2>&1; then
     exit 1
 fi
 if [ ! -x "$here/.venv/bin/python" ]; then
-    echo "Note: $here/.venv is missing. The app needs it: python3 -m venv .venv; source .venv/bin/activate; pip install -r requirements.txt" >&2
+    echo "No Python environment in $here yet: setting it up first (setup.sh)…"
+    bash "$here/setup.sh"
 fi
 
 work="$(mktemp -d)"

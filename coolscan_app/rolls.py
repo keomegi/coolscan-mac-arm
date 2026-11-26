@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 
+from .imaging import filmfix
 from .imaging.colour import FILM_PROFILE_LEAST, film_profile_from
 
 DESCRIPTION_FILE = "Description.txt"   # the film description, kept in each roll's folder
@@ -218,6 +219,7 @@ class RollsMixin:
         profile = str(known.get("film_profile", "") or "")
         st["film_profile"] = profile if profile in st["film_profiles"] else ""
         st["roll"], st["start"], st["film_description"] = name, 0, ""
+        self._sync_roll_colour()
         self.read_description()
         self.save_settings()
         self.say(f"back in {name}: the next picture gets number {self.next_number()}")
@@ -249,7 +251,10 @@ class RollsMixin:
             return
         try:
             frames = self._roll_colour()
-            frames[stem] = {**measured, "exposures": {str(k): int(v) for k, v in dict(exposures or {}).items()}}
+            entry = {**measured, "exposures": {str(k): int(v) for k, v in dict(exposures or {}).items()}}
+            if self._film_check(stem, entry, frames):
+                entry["own"] = True   # another film than the roll's: not part of the roll's measurements
+            frames[stem] = entry
             folder = self.roll_dir()
             text = json.dumps({"about": "Coolscan: the film colour measured on each scanned frame of this roll "
                                         "(densities with the exposure taken out). Film profiles are made from it.",
@@ -262,13 +267,164 @@ class RollsMixin:
                 self._colour_warned = True
                 self.say(f"could not keep this frame's film colour for film profiles ({e}); scanning goes on")
 
+    def _roll_folder_now(self):
+        """The folder scans go into now, without choosing a roll (roll_dir does), or None."""
+        st = self.settings
+        if st["use_roll"]:
+            return self._base() / st["roll"] if st["roll"] else None
+        return self._base()
+
+    def _roll_colour_file(self):
+        """The current roll's FilmProfile.json (filmfix): (folder, its contents or None)."""
+        folder = self._roll_folder_now()
+        if folder is None or getattr(self, "testing", False):   # test mode swaps film profiles itself
+            return folder, None
+        return folder, filmfix.read_roll(folder)
+
+    # -- a strip of another film scanned into the roll by mistake
+    def _strip_film(self):
+        """What is known about the strip in the scanner: {"strip", "roll", "stems", "state", ...}.
+        state: "" (nothing odd), "warn" (looks like another film: asked), "own" (answered: its own colour),
+        "same" (answered: the same film)."""
+        sid, roll = getattr(self, "strip_id", 0), self.settings["roll"]
+        sf = getattr(self, "strip_film", None)
+        if sf is None or sf["strip"] != sid or sf["roll"] != roll:
+            sf = self.strip_film = {"strip": sid, "roll": roll, "stems": [], "state": ""}
+        return sf
+
+    def _film_check(self, stem, entry, frames):
+        """A scanned frame's film against the roll's frames from earlier strips: when the base colour
+        of this strip is clearly another, the strip is coloured each frame on its own (the safe way) and
+        the screen asks. True when this frame is to be kept out of the roll's measurements."""
+        sf = self._strip_film()
+        if stem not in sf["stems"]:
+            sf["stems"].append(stem)
+        if sf["state"] == "same":
+            return False
+        if sf["state"] in ("warn", "own"):
+            return True
+        ref = [f for k, f in frames.items() if k not in sf["stems"] and isinstance(f, dict) and not f.get("own")]
+        cur = [frames[k] for k in sf["stems"] if k != stem and k in frames] + [entry]
+        gap = filmfix.base_colour_gap(ref, cur)
+        if gap is None or gap <= (filmfix.GAP_ONE if len(cur) == 1 else filmfix.GAP_MORE):
+            return False
+        sf.update(state="warn", gap=round(gap, 2), compared=len(ref), had_colour=self._film_profile() is not None)
+        for k in sf["stems"]:   # the strip's earlier frames too
+            if k in frames and isinstance(frames[k], dict):
+                frames[k]["own"] = True
+        self.say(f"WARNING: this strip looks like another film than the rest of {self.settings['roll'] or 'this folder'} "
+                 f"(its film base is another colour, by {gap:.2f} in density, against {len(ref)} earlier frames). "
+                 "Its frames are coloured each on their own for now. Start a new roll if it is another film, "
+                 "or say it is the same film (see the bar above the frames).")
+        with self.lock:
+            self.version += 1
+        return True
+
+    def film_warning_state(self):
+        sf = getattr(self, "strip_film", None)
+        if not sf or sf["strip"] != getattr(self, "strip_id", 0) or sf["roll"] != self.settings["roll"] or sf["state"] != "warn":
+            return None
+        return {"gap": sf.get("gap"), "frames": len(sf["stems"]), "compared": sf.get("compared"),
+                "roll": sf["roll"], "had_colour": bool(sf.get("had_colour"))}
+
+    def film_warning_answer(self, action):
+        """The person's answer to the other-film bar: "same" (the roll's film after all) or "own" (keep
+        this strip's frames on their own colour). A new roll is started with New roll, as always."""
+        sf = getattr(self, "strip_film", None)
+        if not sf or sf["state"] not in ("warn", "own", "same"):
+            return {"ok": False, "error": "Nothing to answer any more."}
+        if action not in ("same", "own"):
+            return {"ok": False, "error": "unknown"}
+        sf["state"] = action
+        frames = self._roll_colour()
+        changed = False
+        for k in sf["stems"]:
+            if k in frames and isinstance(frames[k], dict) and bool(frames[k].get("own")) != (action == "own"):
+                changed = True
+                if action == "own":
+                    frames[k]["own"] = True
+                else:
+                    frames[k].pop("own", None)
+        if changed:
+            try:
+                folder = self.roll_dir()
+                tmp = folder / (COLOUR_FILE + ".part")
+                tmp.write_text(json.dumps({"about": "Coolscan: the film colour measured on each scanned frame of this roll "
+                                                    "(densities with the exposure taken out). Film profiles are made from it.",
+                                           "frames": frames}, indent=1), encoding="utf-8")
+                os.replace(tmp, folder / COLOUR_FILE)
+            except OSError as e:
+                self.say(f"could not note that with the roll ({e})")
+        self.say("this strip is the same film as the roll: the next frames get the roll's colour again; the Library shows "
+                 "the ones already scanned with it too" if action == "same"
+                 else "this strip keeps its own colour: each frame on its own, and left out of the roll's measurements")
+        try:
+            self.redraw()
+        except Exception:  # noqa: BLE001
+            pass
+        with self.lock:
+            self.version += 1
+        return {"ok": True}
+
     def _film_profile(self):
-        """The film profile in use for colour negatives, or None (each frame on its own)."""
+        """The film numbers in use for colour negatives, or None (each frame on its own). The roll's own
+        FilmProfile.json decides; a roll without one goes by the film profile picked (as before)."""
+        if self._film() != "negative":
+            return None
+        sf = getattr(self, "strip_film", None)
+        if sf and sf["state"] in ("warn", "own") and sf["strip"] == getattr(self, "strip_id", 0) and sf["roll"] == self.settings["roll"]:
+            return None   # a strip of another film: each frame on its own
+        folder, d = self._roll_colour_file()
+        if d is not None:
+            return filmfix.roll_numbers(folder, d)
         name = self.settings["film_profile"]
-        if not name or self._film() != "negative":
+        if not name:
             return None
         profile = self.settings["film_profiles"].get(name)
         return profile if isinstance(profile, dict) else None
+
+    def roll_colour_state(self):
+        """For the scanning screen: where the roll's colour of negatives comes from."""
+        folder, d = self._roll_colour_file()
+        has_file = d is not None
+        d = d or {"mode": "profile" if self.settings["film_profile"] else "frame", "name": self.settings["film_profile"]}
+        return {"mode": d["mode"], "name": d.get("name") or "", "words": filmfix.MODE_WORDS[d["mode"]], "file": has_file}
+
+    def roll_colour_words(self):
+        folder, d = self._roll_colour_file()
+        if d is None:
+            return f'film profile "{self.settings["film_profile"]}"'
+        if d["mode"] == "profile":
+            return f'film profile "{d.get("name") or "?"}" (kept with the roll)'
+        return filmfix.MODE_WORDS[d["mode"]]
+
+    def _sync_roll_colour(self):
+        """The film profile picked follows the roll's own file, so the Film box shows what is used."""
+        folder, d = self._roll_colour_file()
+        if d is None:
+            return False
+        name = (d.get("name") or "") if d["mode"] == "profile" else ""
+        name = name if name in self.settings["film_profiles"] else ""
+        changed = self.settings["film_profile"] != name
+        self.settings["film_profile"] = name
+        return changed
+
+    def roll_colour_changed(self, folder):
+        """The Library changed a folder's film colour: when scans go into that folder, the screen follows."""
+        now = self._roll_folder_now()
+        try:
+            same = now is not None and Path(folder).resolve() == now.resolve()
+        except OSError:
+            same = False
+        if not same:
+            return
+        self._sync_roll_colour()
+        self._remember_roll()
+        self.save_settings()
+        try:
+            self.redraw()
+        except Exception:  # noqa: BLE001 - only the pictures on screen; the setting is kept anyway
+            pass
 
     def film_profiles(self):
         """For the screen: the saved film profiles, by name."""
@@ -286,7 +442,7 @@ class RollsMixin:
             return {"ok": False, "error": "Give the film a name first, for example Kodak Gold 200."}
         if self._film() != "negative":
             return {"ok": False, "error": "Film profiles are for colour negatives."}
-        frames = list(self._roll_colour().values())
+        frames = [f for f in self._roll_colour().values() if not (isinstance(f, dict) and f.get("own"))]
         profile = film_profile_from(frames)
         if profile is None:
             if len(frames) < FILM_PROFILE_LEAST:
@@ -305,10 +461,28 @@ class RollsMixin:
         return {"ok": True, "name": name, "frames": profile["frames"]}
 
     def use_film_profile(self, name):
-        """Switch to a saved film profile, or with "" back to each frame on its own."""
+        """Switch to a saved film profile, or with "" back to each frame on its own; "@roll" colours by this
+        roll's own frames, "@base" by the film base picked in the Library. Kept in the roll's own
+        FilmProfile.json, so the Library and later scans of the roll use it too."""
         name = str(name or "")
-        if name and name not in self.settings["film_profiles"]:
+        mode = {"": "frame", "@roll": "roll", "@base": "base"}.get(name, "profile")
+        if mode == "profile" and name not in self.settings["film_profiles"]:
             return {"ok": False, "error": "That film profile is not there any more."}
+        if hasattr(self, "library_film_colour") and not getattr(self, "testing", False):
+            folder = self.roll_dir()
+            base = self._base()
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                key = "" if folder == base else str(folder.relative_to(base))
+            except (OSError, ValueError) as e:
+                return {"ok": False, "error": f"Could not keep it with the roll ({e})."}
+            res = self.library_film_colour(key, mode, name if mode == "profile" else "")
+            if not res.get("ok"):
+                return res
+            self.say("colour of negatives for this roll: " + self.roll_colour_words())
+            return {"ok": True}
+        if mode in ("roll", "base"):
+            return {"ok": False, "error": "Not while testing."}
         self.settings["film_profile"] = name
         self._remember_roll()
         self.save_settings()
@@ -323,8 +497,13 @@ class RollsMixin:
         was_used = self.settings["film_profile"] == name
         if was_used:
             self.settings["film_profile"] = ""
+        folder, d = self._roll_colour_file()
+        kept = bool(d and d.get("mode") == "profile" and d.get("name") == name)
+        if kept:
+            was_used = False   # the roll has the numbers in its own FilmProfile.json: nothing on screen changes
         self.save_settings()
-        self.say(f'film profile "{name}" deleted' + (": negatives are converted each frame on its own again" if was_used else ""))
+        self.say(f'film profile "{name}" deleted' + (": negatives are converted each frame on its own again" if was_used else "")
+                 + ("; this roll keeps its numbers (in FilmProfile.json in the roll folder)" if kept else ""))
         if was_used:
             self.redraw()
         with self.lock:

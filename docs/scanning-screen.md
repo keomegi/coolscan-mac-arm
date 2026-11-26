@@ -22,12 +22,27 @@ edge and a "Scanning…" mark among the small pictures.
 
 On the right are the film and the picture:
 
-- **Frames**: the frames of the strip as cards, two or more to a row, in the order they lie on
-  the strip as the thumbnail pass saw it (on the LS-40 that is the last frame first), each with
+- **Frames**: the frames of the strip as cards, two or more to a row, in frame order, frame 1 first,
+  each with
   its number and tick box. They appear by themselves after the thumbnail pass. The ← → keys move
   along them in that order. Left of each picture the card shows what the frame will be scanned
   with (resolution, dust removal, focus, exposure) and a label: **Same as all frames**, or
   **Own settings** in orange, with the frame's own values in yellow.
+- **Ticks only select.** Tick the frames you want and press Scan ("Scan 2 selected"); with none
+  ticked, Scan takes the whole strip. Once the scan has started the ticks are taken off.
+- **The scan queue**: while a strip is scanned, each card shows its place (Scanning…, Next, 2nd in
+  line, Done, Failed), and a waiting frame has "↑ Sooner". Two buttons appear above the cards:
+  **Add to scan** puts the ticked frames at the end (a frame scanned already is scanned again) and
+  **Take out of scan** removes the ticked frames that are still waiting. A tick by itself changes
+  nothing. The scan keeps going throughout; file numbers follow the order the frames are scanned in.
+- **Scan again with the same settings?** A frame scanned on this strip already, with nothing
+  changed since (settings, its own settings, crop, frame position, roll folder), is asked about
+  before it is scanned again: Cancel, scan only the other frames, or scan again.
+- **Editing a scanned frame**: a frame scanned on this strip can still be cropped and turned on
+  this screen. The change is kept for its saved picture as a Library edit (in the folder's
+  Library.json, like a crop made in the Library), so the file is never changed. A crop reaching
+  past the part that was saved is cut to what the file holds; press Scan to scan the frame again
+  with the new crop. RAW files are left alone (they are edited on the Re-develop page).
 - **Settings for one frame**: "Change for this frame…" on a card, "Settings for this frame…"
   under the big picture, or the S key, opens a list of the settings a frame can have of its own
   (resolution, multi-sample, Multi-Exposure, dust removal and how, grain, restore colours, focus,
@@ -223,7 +238,7 @@ buttons says what is set now.
   also carries a note of how it was scanned (the film, the pass's exposures, the turn and crop),
   so it can be developed again later without the scanner (see **Re-develop RAW files**).
   The app starts in Archive mode every time; to have it start the way you left the switch, untick
-  **Start in Archive mode** under Additional settings. Files
+  **Start in Archive mode** in Settings, on the Scanning tab. Files
   scanned before this still re-develop, with a little less to go on (see that section).
 - **File names** are built in this order: prefix, scan date, picture number, roll number, e.g.
   `20261122_005_R001.tif`. The roll number is always there and is the number of the roll you
@@ -289,12 +304,16 @@ buttons says what is set now.
   `Description.txt` in the roll folder and updated whenever you change it, also during a scan.
   New roll… has the same box. If you edit the file by hand, the app picks that up when it starts.
 - **Settings window** (the ⚙ button in the top bar, or ⌘,): the things set once and rarely
-  changed, in one window over the page: what happens when a strip is done (eject, stop at the first
-  failed frame, scan log), Start in Archive mode, Auto crop learning with its Learn button and
-  Learning report, messages, and logs and cache. Its **Preview scan** part can switch off
+  changed, in one window over the page, on seven tabs: **Saving** (Save as, File names),
+  **Thumbnail and preview**, **Scanning** (while a strip is scanned, when it is done, frame
+  positions, Archive mode), **Crop** (auto crop and learning from your crops), **Auto rotate** (and
+  learning from your turns), **Notifications** and **Logs**. Each group opens with a line saying
+  what it is; its "?" shows the longer explanation. Learning happens on your Mac only; each of the
+  two learning groups has a switch to stop it and **Reset to default**, which goes back to the
+  model that came with the app. The **Preview** group can switch off
   autofocus and exposure metering for previews: quicker (autofocus took 7 to 18 s a frame on the
   LS-40), but the preview may be soft or wrongly exposed, and such a frame gets a red "AF off" /
-  "AE off" mark like in Nikon Scan. The scan itself still focuses and meters as set. **Send a message when a strip is done** tells
+  "AE off" mark like in Nikon Scan. The scan itself still focuses and meters as set. **Notify me when a strip is done** (Notifications tab) tells
   you when a batch finishes or stops on an error, with the number of frames saved and the roll.
   Tick it, then pick any mix of three ways; the box explains how to set up each one. Settings
   saved before this box existed switch it on by themselves if a way was already filled in.
@@ -339,3 +358,13 @@ Pictures of negatives on the screen are inverted so you can judge them. Negative
 you choose otherwise under "Negatives as".
 
 [Back to the README](../README.md)
+
+## Auto rotate: Accept / Reject, and strips in upside down
+
+- A frame auto rotate turned by itself has a purple border and a **↻ Auto rotated · ✓ Accept · ✕ Reject** mark on its card (and the same buttons under the big picture). Accept keeps the turn and learns from it as a right guess; Reject turns it back and learns from that more strongly.
+- Before guessing each frame, auto rotate looks at the whole strip: when most frames that are clearly the right way up or upside down come out upside down (normal for some films, not a mistake), every frame is turned 180° and a purple bar over the frames says 'Frame direction found' and asks you to confirm it with Accept / Reject (Reject turns the strip the other way and guesses each frame again). Not sure: the strip is kept as the last one was.
+- The "Turn every frame 180°" switch is hidden from the Film card unless "Show “Turn every frame 180°” on the main screen" is ticked in Settings ⚙.
+- Auto rotate uses a ready-made model ([auto-turn.md](auto-turn.md)). On thumbnails it only suggests a turn (too few pixels to be sure); a preview scan it turns by itself when sure; and the scan itself is looked at once more just before its files are written, so the saved files are very likely the right way up even when the thumbnail was not.
+- A frame already scanned keeps the turn its files were saved with: auto rotate never turns its picture on screen again.
+- Settings ⚙ › **Learn from the whole Library**: once, when every Library picture is the right way up, keeps each finished picture with its turn, plus its RAW file (as the scanner reads it, and made as small as a thumbnail pass), then learns.
+- In Archive mode each RAW file keeps the frame's piece of the thumbnail pass inside it (a private TIFF tag, about 65 KB; other programs ignore it), as the scanner sent it and turned like the file. Auto rotate learns from it too (a frame with few pixels), on the scanning screen and with Learn from the whole Library. RAW files from before have none: for those the RAW is made that small.

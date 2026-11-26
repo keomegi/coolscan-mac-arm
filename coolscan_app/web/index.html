@@ -2,8 +2,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan</title>
 <link rel="stylesheet" href="/style.css"></head><body class="main">
 <header id="bar">
-<div class="brand"><h1>Coolscan</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
-<label class="archtoggle" id="archtoggle" title="Archive mode: each frame is saved twice from one pass, as RAW (the untouched scan with its infrared) and as Positive (the finished picture)"><input type="checkbox" id="s-archive" role="switch"><span class="sw" aria-hidden="true"></span><span class="txt"><b>Archive mode</b><small id="archsub">RAW + Positive</small></span></label>
+<div class="brand"><h1>Coolscan</h1><nav class="pages" aria-label="Pages"><a href="/" aria-current="page">Scan</a><a href="/library" title="Browse the pictures you have scanned, roll by roll">Scanned pictures</a><a href="/develop" title="Make pictures again from their RAW files, without scanning">Re-develop</a></nav><span id="status" role="status" aria-live="polite">starting…</span></div>
+<label class="archtoggle" id="archtoggle" title="Archive mode: each frame is saved twice from one pass, as RAW (the untouched scan with its infrared) and as Positive (the finished picture)"><input type="checkbox" id="s-archive" role="switch"><span class="sw" aria-hidden="true"></span><span class="txt"><b>Archive mode</b><small id="archsub">RAW + Positive</small></span></label><button class="infobtn" id="b-archinfo" aria-label="What Archive mode does" title="What Archive mode does">i</button>
 <div class="tools" role="toolbar" aria-label="Scanner">
 <div class="quiet" role="group" aria-label="Scanner and film">
 <button id="b-connect" title="Connect to the scanner again">Connect</button>
@@ -16,8 +16,7 @@
 <button class="primary" id="b-scan" title="Scan and save (⌘ Return)">Scan all frames</button>
 <button id="b-stop" disabled title="Stop after the current step">Stop</button>
 <span class="gap"></span>
-<button class="icon gear" id="b-settings" title="Settings: messages, logs, crop learning, what happens when a strip is done (⌘,)" aria-label="Settings">⚙</button><a class="pagelink" href="/library" title="Browse the pictures you have scanned, roll by roll">Library</a>
-<a class="pagelink" href="/develop" title="Make the finished pictures again from RAW files, with other settings, without scanning">Re-develop RAW files</a>
+<button class="icon gear" id="b-settings" title="Settings (⌘,)" aria-label="Settings">⚙</button>
 </div>
 <div id="setline" aria-label="Settings of the scan"><span class="lbl" id="setlbl">Next scan</span><span id="setchips"></span></div>
 <div id="actline">
@@ -44,7 +43,7 @@
 <label class="row"><span>Film type</span><select id="s-film"><option value="negative">Colour negative</option><option value="positive">Slide</option><option value="kodachrome">Kodachrome</option><option value="mono">B&amp;W negative (silver)</option><option value="chromo">B&amp;W chromogenic (C-41: Ilford XP2, Kodak BW400CN)</option></select></label>
 <label class="row" id="fmtrow"><span>Format</span><select id="s-format"><option value="">From holder</option></select></label>
 <label class="row"><span>Show negatives as positives</span><input type="checkbox" id="s-invert_preview"></label>
-<label class="row"><span>Turn every frame 180°</span><input type="checkbox" id="s-rotate180"></label>
+<label class="row" id="row-rotate180" hidden><span>Turn every frame 180°</span><input type="checkbox" id="s-rotate180"></label>
 <div id="profilebox">
 <p class="sub">Colour of negatives</p>
 <label class="row"><span>Colour from</span><select id="filmprofile" aria-label="Where the colour of negatives comes from"></select></label>
@@ -54,16 +53,9 @@
 <div class="inline" id="profiledel" hidden><span id="profiledelmsg"></span><button id="b-profiledelyes">Delete</button><button id="b-profiledelno">Cancel</button></div>
 <p class="hint" id="profilemsg" hidden></p>
 </div>
-<p class="help"><i>Each frame on its own</i> works out a negative's colour from that frame alone, which can go wrong when a frame is mostly one colour (grass, sky, a sunset). A film profile uses the film's colour instead: every frame you scan is measured, and "Save this roll's film…" makes a profile from this roll. Pick it for later rolls of the same film. Brightness is still set per frame; thumbnails always use each frame on its own.</p>
+<p class="help"><i>Each frame on its own</i> works out a negative's colour from that frame alone, which can go wrong when a frame is mostly one colour (grass, sky, a sunset). A film profile uses the film's colour instead: every frame you scan is measured, and "Save this roll's film…" makes a profile from this roll. Pick it for later rolls of the same film. <i>This roll's own frames</i> uses the frames of this roll measured so far (3 or more). What you pick is kept with the roll, in FilmProfile.json in its folder, so Scanned pictures shows the roll's pictures the same way and going back to the roll brings it back. For a film with an unusual mask (Orwocolor, for example), open a picture in Scanned pictures and press "Film base…" to click on the clear film between frames. Brightness is still set per frame; thumbnails always use each frame on its own.</p>
 </div></details>
 
-<details class="card" id="g-preview" open><summary>Thumbnail &amp; preview<span class="sum" id="sum-preview"></span></summary><div class="body">
-<p class="hint">The two quick looks before you scan. Neither is saved.</p>
-<label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
-<p class="hint"><b>Thumbnail</b>: one fast, low-resolution pass over the whole strip that finds the frames and gives each its small picture. With the box ticked it runs by itself when a strip goes in.</p>
-<label class="row"><span>Preview scan dpi</span><select id="s-preview_dpi"></select></label>
-<p class="hint"><b>Preview</b>: a quick scan of one frame (or the ticked ones) at this resolution, sharper than the thumbnail, to judge focus, colour and crop. Once a frame is scanned, the big picture shows the scan itself.</p>
-</div></details>
 
 <details class="card" id="g-focus" open><summary>Focus &amp; exposure<span class="sum" id="sum-focus"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <label class="row"><span>Focus</span><select id="s-focus_mode"><option value="frame">Autofocus each frame</option><option value="auto">Autofocus on every pass</option><option value="same">Same focus for all frames</option><option value="manual">Manual lens position</option></select></label>
@@ -97,6 +89,7 @@
 <label class="row"><span>Resolution (dpi)</span><select id="s-dpi"></select></label>
 <label class="row"><span>Multi-sample</span><select id="s-samples"></select></label>
 <p class="hint" id="mshint" hidden></p>
+<label class="row" id="superfinerow" hidden title="Read one line of the sensor at a time: no banding from line to line, about twice as long"><span>Superfine</span><input type="checkbox" id="s-superfine"></label>
 <label class="row"><span>Multi-Exposure</span><select id="s-multi_exposure"><option value="0">Off</option><option value="2">2x longer</option><option value="4">4x longer</option></select></label>
 <p class="hint" id="mehint" hidden></p>
 <label class="row" id="cleanrow"><span>Dust &amp; scratch removal</span><input type="checkbox" id="s-clean"></label>
@@ -111,9 +104,6 @@
 <details class="card" id="g-save"><summary>Save as<span class="sum" id="sum-save"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
 <p class="hint" id="archnote">Archive mode is switched at the top of the window.</p>
 <label class="row" id="cropscanrow"><span>Scan only the cropped part</span><input type="checkbox" id="s-crop_scan"></label>
-<label class="row"><span>Crop each frame automatically</span><input type="checkbox" id="s-auto_crop"></label>
-<label class="row"><span>Auto crop cuts further in by</span><select id="s-auto_crop_trim"><option value="0">Nothing</option><option value="0.01">1%</option><option value="0.02">2%</option><option value="0.03">3%</option></select></label>
-<label class="row"><span>Auto crop cuts</span><select id="s-auto_crop_sides"><option value="all">All four sides</option><option value="ends">Left and right only</option></select></label>
 <label class="row" id="negrow"><span>Negatives as</span><select id="s-negatives"><option value="positive">Positive</option><option value="negative">Negative (raw)</option><option value="both">Both</option></select></label>
 <label class="row"><span>Negative tone</span><select id="s-tone"><option value="flat">Flat (for editing)</option><option value="nikon">Nikon Scan look</option></select></label>
 <label class="row"><span>Colour space</span><select id="s-colour_space"><option value="ProPhoto RGB">ProPhoto RGB</option><option value="Adobe RGB (1998)">Adobe RGB (1998)</option><option value="sRGB IEC61966-2.1">sRGB IEC61966-2.1</option><option value="Apple RGB">Apple RGB</option><option value="ColorMatch RGB">ColorMatch RGB</option><option value="Bruce RGB">Bruce RGB</option><option value="Wide Gamut RGB">Wide Gamut RGB</option><option value="scanner">Scanner RGB (Nikon profile)</option></select></label>
@@ -121,7 +111,7 @@
 <p class="hint warn" id="foldermsg" hidden></p>
 <label class="row"><span>Make a folder for each roll</span><input type="checkbox" id="s-use_roll"></label>
 <p class="hint" id="savewhere"></p>
-<p class="help" id="archint"><b>Archive mode</b> (switch at the top) saves two folders from one pass: RAW (the untouched scan, infrared as a 4th channel) and Positive (the finished picture). It always scans the whole frame. It is on when the app starts; to change that, see Additional settings. <b>Scan only the cropped part</b>: a cropped frame scans faster because only the crop is read; unticked, the whole frame is scanned and cut when saved. All files are 16-bit TIFF. <b>Make a folder for each roll</b>: on, each roll gets its own "Roll 005 - film" folder inside the folder, and names end in the roll number (_R005); off, the pictures go straight into the folder, with no roll folder and no roll number in the name, and the Roll card is hidden.</p>
+<p class="help" id="archint"><b>Archive mode</b> (switch at the top) saves two folders from one pass: RAW (the untouched scan, infrared as a 4th channel) and Positive (the finished picture). It always scans the whole frame. It is on when the app starts; to change that, see Scanning in this window. <b>Scan only the cropped part</b>: a cropped frame scans faster because only the crop is read; unticked, the whole frame is scanned and cut when saved. All files are 16-bit TIFF. <b>Make a folder for each roll</b>: on, each roll gets its own "Roll 005 - film" folder inside the folder, and names end in the roll number (_R005); off, the pictures go straight into the folder, with no roll folder and no roll number in the name, and the Roll card is hidden.</p>
 </div></details>
 
 <details class="card" id="g-names"><summary>File names<span class="sum" id="sum-names"></span><button class="q" aria-label="Explain">?</button></summary><div class="body">
@@ -140,28 +130,35 @@
 <div id="work">
 <section id="frames" aria-label="Frames">
 <div class="head"><h2>Frames</h2><span class="hint" id="framesum"></span><span class="grow"></span>
-<label class="check" title="Move the start and end of each frame onto the gaps between pictures that the thumbnail shows. Frames with no clear gap stay where the scanner put them."><input type="checkbox" id="s-frame_fit"> Fit frames to the gaps</label>
+<span id="qbtns" hidden><button id="b-qadd" title="Put the ticked frames at the end of the scan that is running">Add to scan</button><button id="b-qout" title="Take the ticked frames that are still waiting out of the scan that is running">Take out of scan</button></span>
 <button id="b-all" title="Tick every frame (⌘A)">Select all</button><button id="b-none" title="Untick every frame (Esc)">Select none</button></div>
+<div id="filmwarn" hidden><span id="filmwarntext"></span><button class="small atbtn ok" id="b-filmnew" title="Start a new roll folder for this film; the next frames go into it">New roll…</button><button class="small atbtn no" id="b-filmsame" title="It is the same film as the rest of the roll">Same film</button><button class="small atbtn no" id="b-filmown" title="Stay in this roll, but keep this strip on its own colour and out of the roll's measurements">Keep in this roll, own colour</button></div>
+<div id="stripturn" hidden><span id="stripturntext"></span><button class="small atbtn ok" id="b-stripok" title="Keep it (frames stay as they are now)">✓ Accept</button><button class="small atbtn no" id="b-stripno" title="The strip is the other way round: turn every frame 180° back">✕ Reject</button></div>
+<div id="queue" hidden><span class="lbl">Queue</span><span id="qitems"></span></div>
 <div id="tiles" role="listbox" aria-label="Frames on this strip" aria-multiselectable="true"></div>
+<div id="longnav" hidden><button class="small" id="b-longl" title="Scroll back along the strip" aria-label="Earlier frames">◀</button><span class="hint" id="longpos"></span><button class="small" id="b-longr" title="Scroll on along the strip" aria-label="Later frames">▶</button></div>
 <p class="hint" id="noframes">No frames yet. Feed a strip in and the app finds them, or press Thumbnail.</p>
 </section>
 
 <section id="viewer" aria-label="Preview">
 <div class="head"><h2 id="vtitle">Preview</h2><span class="chip" id="vsrc" hidden></span><button class="chip own" id="vown" hidden title="This frame has settings of its own. Click to see or change them.">Own settings</button><span class="hint" id="vinfo"></span><span class="grow"></span>
-<button id="b-sharper" title="A quick preview scan of this frame, sharper than the thumbnail">Preview scan</button>
+<button id="b-sharper" title="Preview this frame: a quick scan of it, sharper than the thumbnail (the Preview button at the top does the ticked frames)">Preview</button>
 <button class="icon" id="b-rl" title="Turn 90° left ( [ )" aria-label="Turn left">⟲</button><button class="icon" id="b-rr" title="Turn 90° right ( ] )" aria-label="Turn right">⟳</button>
-<button id="b-crop" aria-pressed="false" title="Show the crop box and drag its sides or corners to choose the part that is saved (C)">Crop</button><button id="b-autocrop" title="Find the picture in the frame and crop to it, leaving out the film's edges, the holder and the gap between frames">Auto crop</button><button id="b-cropclear" hidden>Clear crop</button>
+<button id="b-crop" aria-pressed="false" title="Crop: the box starts where auto crop puts it; drag its sides and corners, then Done (C)">Crop</button><button id="b-cropclear" hidden title="Take the crop off">No crop</button><button class="primary" id="b-cropdone" hidden title="Keep this crop (Return)">Done</button>
 <button id="b-zoom" title="Enlarge (Space, or double-click the picture)">Enlarge</button></div>
 <div id="framepos" hidden><span class="lbl">Where this frame sits on the strip:</span>
 <button class="icon" id="b-nudgel" title="Move this frame's window a little to the left on the strip (1% of the frame)" aria-label="Move left">◀</button><button class="icon" id="b-nudger" title="Move this frame's window a little to the right on the strip (1% of the frame)" aria-label="Move right">▶</button>
-<span class="hint" id="posinfo"></span><button class="small" id="b-nudge0" hidden title="Put the frame back where it was found">Reset</button></div>
+<span class="hint" id="posinfo"></span><button class="small" id="b-nudge0" hidden title="Put the frame back where it was found">Reset</button>
+<span class="grow"></span>
+<span id="stripoff" hidden title="Moves every frame on the strip together, for when the pictures sit off to one side in their frames (Nikon Scan called this Strip Film Offset). Each press is 1% of a frame; hold Shift for 5%."><span class="lbl">Strip offset</span><button class="icon" id="b-stripl" aria-label="Move every frame left">◀</button><span id="stripoffval">0%</span><button class="icon" id="b-stripr" aria-label="Move every frame right">▶</button><button class="small" id="b-strip0" hidden title="Put every frame back where the scanner put it">Reset</button></span></div>
 <div id="croptools" hidden><label for="cropratio">Shape</label><select id="cropratio" title="Keep the crop to this shape while you drag (hold Shift to keep the shape it has now)">
 <option value="free">Free</option><option value="frame">Same as the frame</option><option value="1.5">3:2</option><option value="1.3333">4:3</option><option value="1.25">5:4</option><option value="1">Square</option><option value="1.7778">16:9</option></select>
 <button class="icon" id="b-cropswap" title="Turn the crop between wide and tall" aria-label="Turn the crop between wide and tall">⇄</button>
 <span class="hint" id="cropsize"></span></div>
 <div id="stage"><div class="imgw" id="imgw" hidden><img id="big" alt="" draggable="false"><div id="cropbox" hidden title="Drag a side or corner to change the crop, or the middle to move it"><i class="h n" data-h="n"></i><i class="h s" data-h="s"></i><i class="h e" data-h="e"></i><i class="h w" data-h="w"></i><i class="h nw" data-h="nw"></i><i class="h ne" data-h="ne"></i><i class="h sw" data-h="sw"></i><i class="h se" data-h="se"></i></div><div class="mark" id="fmark" hidden></div></div>
-<p class="hint" id="vempty">Click a frame above to see it here.</p></div>
+<p class="hint" id="vempty">Click a frame to see it here.</p></div>
 <p class="hint" id="vsaved" hidden></p>
+<p class="hint" id="vturn" hidden><span id="vturntext"></span> <button class="small" id="b-turnhint">Turn it</button> <button class="small" id="b-turnok" hidden>✓ Accept</button> <button class="small" id="b-turnno" hidden>✕ Reject</button></p>
 <div id="viewfoot"><button class="small" id="b-framesets" title="Give the frame you are looking at settings of its own (S)">Settings for this frame…</button><span class="grow"></span><button class="small" id="b-keys" title="Keyboard shortcuts (?)">Keyboard shortcuts</button></div>
 </section>
 
@@ -185,6 +182,19 @@
 <p class="hint">The old files are replaced and cannot be brought back. "Use free numbers" scans with the next numbers nobody uses instead.</p>
 <div class="btnrow"><button id="b-overcancel">Cancel</button><button id="b-overskip">Use free numbers</button><button class="danger" id="b-overok">Replace them</button></div>
 </dialog>
+<dialog id="againdlg" aria-labelledby="againtitle"><h2 id="againtitle">Scan again with the same settings?</h2>
+<p id="againmsg"></p>
+<p class="hint">Nothing was changed since that scan (settings, crop, frame position), so you would get the same picture a second time.</p>
+<div class="btnrow"><button id="b-againcancel">Cancel</button><button id="b-againothers">Scan only the others</button><button class="primary" id="b-againok">Scan again</button></div>
+</dialog>
+<dialog id="archdlg" aria-labelledby="archdlgtitle"><h2 id="archdlgtitle">Archive mode</h2>
+<p><b>On:</b> each frame is saved twice from one pass of the scanner.</p>
+<ul class="plain"><li><b>RAW</b>: the scan exactly as it came from the scanner, with its infrared picture. Nothing is done to it, and it is always the whole frame.</li>
+<li><b>Positive</b>: the finished picture, with dust removal, colour and your crop.</li></ul>
+<p>Because the RAW file is kept, you can make the finished picture again later with other settings on the Re-develop page, without the film or the scanner.</p>
+<p><b>Off:</b> only the finished picture is saved. It takes about half the disk space, but a picture can then only be made again by scanning the film again.</p>
+<p class="hint">The app starts with Archive mode on. To change that: Settings, "Start in Archive mode".</p>
+<div class="row btnrow"><button class="primary" id="b-archok">OK</button></div></dialog>
 <dialog id="keysdlg" aria-labelledby="keystitle"><h2 id="keystitle">Keyboard shortcuts</h2>
 <table class="keys">
 <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Look at another frame</td></tr>
@@ -206,36 +216,103 @@
 <dialog id="framedlg" aria-labelledby="framedlgtitle"><h2 id="framedlgtitle">Settings for this frame</h2>
 <p class="hint">Pick a value to scan this frame with it. "Same as all frames" follows the settings on the left, so a change there still reaches this frame.</p>
 <div id="fsrows"></div>
+<p class="hint" id="fs-when" hidden></p>
 <label class="check" id="fs-alsorow" hidden><input type="checkbox" id="fs-also"> <span id="fs-alsotext">Also for the other ticked frames</span></label>
 <div class="btnrow"><button id="fs-reset">Same as all frames again</button><button class="primary" id="fs-done">Done</button></div>
 </dialog>
 <dialog id="setdlg" aria-labelledby="setdlgtitle"><div class="dlghead"><h2 id="setdlgtitle">Settings</h2><span class="grow"></span><button class="primary" id="b-setdone">Done</button></div>
-<p class="hint">Things you set once and rarely change. The settings for scanning are in the column on the left.</p>
 <span id="sum-done" hidden></span><span id="sum-extra" hidden></span>
-<div id="g-pvquick"><div class="sub">Preview scan</div>
+<span id="sum-preview" hidden></span>
+<section class="settab" data-tab="Saving">
+<div class="sub">Save as</div>
+<p class="what">What is saved from each scan, and where.</p>
+<div data-card="g-save"></div>
+<div class="sub">File names</div>
+<p class="what">How the saved pictures are named and numbered.</p>
+<div data-card="g-names"></div>
+</section>
+<section class="settab" data-tab="Thumbnail and preview">
+<div class="sub">Thumbnail</div>
+<p class="what">One fast, low-resolution pass over the whole strip. It finds the frames and gives each its small picture. Nothing is saved.</p>
+<label class="row"><span>Thumbnail when film goes in</span><input type="checkbox" id="s-auto_thumbnail"></label>
+<p class="help">Ticked: the thumbnail pass runs by itself when a strip goes in. Unticked: press Thumbnail when you want it.</p>
+<div class="sub">Preview</div>
+<p class="what">A quick scan of one frame, sharper than the thumbnail, to judge focus, colour and crop before the real scan. Nothing is saved.</p>
+<label class="row"><span>Preview every frame when film goes in</span><input type="checkbox" id="s-auto_preview"></label>
+<label class="row"><span>Preview scan dpi</span><select id="s-preview_dpi"></select></label>
 <label class="row"><span>Autofocus each frame for its preview</span><input type="checkbox" id="s-preview_af"></label>
 <label class="row"><span>Meter the exposure of each preview</span><input type="checkbox" id="s-preview_ae"></label>
-<p class="help">Unticked makes a preview quicker: autofocus takes about 7 to 18 seconds a frame on your LS-40, metering a few more. Without autofocus the lens stays where it was, so the preview can look soft; the scan still focuses the frame as set on the left. Without metering the preview reuses the exposure of the last preview, so a much darker or lighter frame can look wrong. A frame previewed this way gets a red <b>AF off</b> or <b>AE off</b> mark, like in Nikon Scan. The scan itself is not changed by these.</p></div>
-<div id="g-done"><div class="sub">When a strip is done</div>
-<label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
+<p class="help"><b>Preview every frame when film goes in</b> (off to begin with): after the thumbnail, each frame gets a preview scan by itself, which takes a while longer per frame; it needs "Thumbnail when film goes in" ticked. <b>Preview scan dpi</b>: the resolution of a preview. Once a frame is scanned, the big picture shows the scan itself.</p>
+<p class="help" id="pvhelp">Unticked makes a preview quicker: autofocus takes about 7 to 18 seconds a frame on your LS-40, metering a few more. Without autofocus the lens stays where it was, so the preview can look soft; the scan still focuses the frame as set on the left. Without metering the preview reuses the exposure of the last preview, so a much darker or lighter frame can look wrong. A frame previewed this way gets a red <b>AF off</b> or <b>AE off</b> mark, like in Nikon Scan. The scan itself is not changed by these.</p></div>
+</section>
+<section class="settab" data-tab="Scanning">
+<div class="sub">While a strip is scanned</div>
+<p class="what">What the app does while it works through the frames of a strip.</p>
 <label class="row"><span>Stop at the first frame that fails</span><input type="checkbox" id="s-stop_on_errors"></label>
 <label class="row"><span>Write a scan log</span><input type="checkbox" id="s-scan_log"></label>
 <p class="help">If a frame fails, the rest of the strip is still scanned unless you tick "Stop at the first frame that fails". The scan log is ScanLog.txt in the roll folder.</p>
-</div>
-<div id="g-extra">
+<div class="sub">When a strip is done</div>
+<p class="what">What happens after the last frame of a strip is saved.</p>
+<label class="row"><span>Eject the film</span><input type="checkbox" id="s-eject_after"></label>
+<p class="help">Ticked: the scanner pushes the film out when the strip is finished, ready for the next one. Unticked: the film stays in until you press Eject.</p>
+<div class="sub">Frame positions</div>
+<p class="what">Where each frame sits on the strip. For when pictures sit off to one side, or a frame shows the start of the next picture.</p>
+<label class="row"><span>Show the frame position arrows</span><input type="checkbox" id="s-show_frame_offset"></label>
+<p class="hint">For when pictures sit off to one side in their frames, or a frame shows the start of the next picture. Ticked: "Strip offset ◀ ▶" appears above the big picture and moves every frame on the strip together (Nikon Scan called this Strip Film Offset), and small arrows above the preview move one frame alone. The frame pictures redraw as you press; scans read the moved frames.</p>
+<label class="row"><span>Place frames automatically from the gaps</span><input type="checkbox" id="s-frame_auto"></label>
+<p class="hint">Ticked: after the thumbnail, the app looks for the gaps between the pictures and moves the frames onto them by itself, for example when the strip was cut through its first picture. Frames with no clear gap stay where the scanner put them. Unticked: frames stay where the scanner put them, as in Nikon Scan.</p>
 <div class="sub">Archive mode</div>
+<p class="what">Archive mode saves two files of each frame from one pass: the untouched scan (RAW) and the finished picture (Positive). It is switched at the top of the main window.</p>
 <label class="row"><span>Start in Archive mode</span><input type="checkbox" id="s-archive_default"></label>
 <p class="hint">Ticked: the app always starts with Archive mode on. Unticked: it starts the way you left the switch at the top.</p>
-<div class="sub">Auto crop learning</div>
+</section>
+<section class="settab" data-tab="Crop">
+<div class="sub">Auto crop</div>
+<p class="what">Cuts the film edges, the holder and the gap between pictures off a frame.</p>
+<label class="row"><span>Crop each frame automatically</span><input type="checkbox" id="s-auto_crop"></label>
+<label class="row"><span>Auto crop cuts further in by</span><select id="s-auto_crop_trim"><option value="0">Nothing</option><option value="0.01">1%</option><option value="0.02">2%</option><option value="0.03">3%</option></select></label>
+<label class="row"><span>Auto crop cuts</span><select id="s-auto_crop_sides"><option value="all">All four sides</option><option value="ends">Left and right only</option></select></label>
+<p class="help"><b>Crop each frame automatically</b>: every frame is cropped as it is shown; unticked, a frame is cropped only when you press Crop. You can always move the box by hand. <b>Cuts further in by</b>: takes that much more off each side it cuts, for a clean edge. <b>Cuts</b>: all four sides, or only the two ends along the strip.</p>
+<div class="sub">Learning from your crops</div>
+<p class="what">Auto crop can learn to crop the way you do. It learns on this Mac only: your pictures, the small copies kept to learn from and what is learned from them stay on this Mac and are never sent anywhere.</p>
 <label class="row"><span>Auto crop learns from my crops</span><input type="checkbox" id="s-auto_crop_learn"></label>
-<p class="hint">Ticked: every crop you draw by hand, here or in the Library, is kept to learn from (whether or not "Crop each frame automatically" is on), it learns again by itself after every 10 new crops, and Auto crop crops the way you do once that is closer to your crops than the built-in rule. Unticked: nothing is kept or learned and Auto crop uses the built-in rule only.</p>
-<div class="btnrow"><button id="b-croplearn" title="Learn now from all the crops kept so far and from the crops in the Library">Learn from my crops</button><button id="b-croplearnreport" aria-expanded="false">Learning report</button></div>
+<p class="hint">Ticked: every crop you draw by hand, here or in Scanned pictures, is kept to learn from, and it learns again by itself after every 10 new crops. What it learned is used only where it lands closer to your crops than the model that came with the app and the built-in rule. Unticked: none of your crops is kept and nothing more is learned; Auto crop goes on using what it has.</p>
+<div class="btnrow"><button id="b-croplearn" title="Learn now from all the crops kept so far and from the crops in Scanned pictures">Learn from my crops</button><button id="b-croplearnreport" aria-expanded="false">Learning report</button></div>
 <p class="hint" id="croplearnmsg"></p>
 <div id="croplearnreport" hidden></div>
-<div class="sub">Messages when a strip is done</div>
-<p class="hint" id="notifymissing" hidden>Not installed. Messages come from an optional file, <code>notify.py</code>, that is kept out of git. To use them, put it in the <code>coolscan_app/extras</code> folder of the app (Claude can put it there for you), then start the app again.</p>
+<label class="row"><span>Delete learning pictures after learning</span><input type="checkbox" id="s-crop_learn_delete_after"></label>
+<p class="hint">To learn, it keeps a small greyscale copy (200 pixels) of each frame you crop, on this Mac only (never on GitHub). Ticked: they are deleted each time it has learned. What it learned stays, and crops made in Scanned pictures are read again from there next time, but crops from the scanning screen can then no longer be learned from again. Off by default: keeping them lets it learn better as you add crops.</p>
+<div class="btnrow"><button id="b-croplearndelete">Delete learning pictures</button></div>
+<p class="hint" id="croplearndelmsg"></p>
+<div class="btnrow"><button id="b-croplearnreset" title="Forget what was learned from your crops and use the crop model that came with the app again">Reset to default</button></div>
+<p class="hint" id="croplearnresetmsg"></p>
+<p class="hint"><b>Reset to default</b> forgets what was learned from your crops and goes back to the crop model that came with the app from GitHub. The learning pictures stay until you delete them, so with learning ticked it learns from them again; untick it to stay with the default.</p>
+</section>
+<section class="settab" data-tab="Auto rotate">
+<div class="sub">Auto rotate</div>
+<p class="what">Works out which way up each picture goes, and turns it or suggests a turn.</p>
+<label class="row"><span>Auto rotate</span><input type="checkbox" id="s-auto_turn"></label>
+<p class="hint">Ticked: the app works out which way up each picture goes, with a ready-made model trained on a great many photographs (80 MB, fetched once from GitHub, run on the GPU). <b>What to expect:</b> the scanned picture is very likely turned the right way by itself: the scan is looked at once more just before its files are saved, and on the pictures of the first eleven rolls that was right for every one. A preview scan is nearly as good. A thumbnail is not: it has too few pixels (about 6 in 100 come out wrong), so on thumbnails it only suggests a turn under the picture and never turns by itself. So frames can look the wrong way up after the thumbnail pass and still be saved the right way up. A turn it made by itself is marked on the frame card: Accept keeps it, Reject turns it back. A frame you turned or cropped by hand is never turned again. Your own turns are still kept to learn from, and are what it falls back on without the ready-made model (no MLX, or the file not fetched yet). Unticked: nothing is kept, learned, turned or suggested.</p>
+<label class="row"><span>Show “Turn every frame 180°” on the main screen</span><input type="checkbox" id="s-show_rotate180"></label>
+<p class="hint">Auto rotate first finds the frame direction of the whole strip: when the frames come out upside down (normal for some films), every frame is turned 180° by itself, and a purple bar over the frames asks you to confirm it with Accept or Reject. Tick this to also have the switch in the Film card, to set it by hand.</p>
+<div class="sub">Learning from your turns</div>
+<p class="what">Auto rotate can also learn from the turns you make by hand. It learns on this Mac only: your pictures, the small copies kept to learn from and what is learned from them stay on this Mac and are never sent anywhere.</p>
+<label class="row"><span>Auto rotate learns from my turns</span><input type="checkbox" id="s-auto_turn_learn"></label>
+<p class="hint">Ticked: each turn you make by hand, here or in Scanned pictures, is kept to learn from, and it learns again by itself after every 10 new turns. Unticked: none of your turns is kept and nothing more is learned; Auto rotate goes on turning and suggesting with what it has.</p>
+<div class="btnrow"><button id="b-turnlearn" title="Learn now from your turns (here and in Scanned pictures)">Learn from my turns</button><button id="b-turnlearnreport" aria-expanded="false">Learning report</button></div>
+<div class="btnrow"><button id="b-turnlearnall" title="Every picture in Scanned pictures is the right way up (with its turn): learn from all of them, once">Learn from all scanned pictures</button></div>
+<p class="hint" id="turnlearnmsg"></p>
+<div id="turnlearnreport" hidden></div>
+<div class="btnrow"><button id="b-turnlearnreset" title="Forget what was learned from your turns and use the turn model that came with the app again">Reset to default</button></div>
+<p class="hint" id="turnlearnresetmsg"></p>
+<p class="hint"><b>Reset to default</b> forgets what was learned from your turns and goes back to the turn model that came with the app from GitHub. The ready-made model is not touched. The learning pictures stay until you delete them (Crop tab), so with learning ticked it learns from them again; untick it to stay with the default.</p>
+</section>
+<section class="settab" data-tab="Notifications">
+<div class="sub">When a strip is done</div>
+<p class="what">Tells you when a strip is finished, so you can walk away while it scans.</p>
+<p class="hint" id="notifymissing" hidden>Not installed. Notifications come from an optional file, <code>notify.py</code>, that is kept out of git. To use them, put it in the <code>coolscan_app/extras</code> folder of the app (Claude can put it there for you), then start the app again.</p>
 <div id="notifyopts" hidden>
-<label class="row"><span>Send a message when a strip is done</span><input type="checkbox" id="s-notify_on"></label>
+<label class="row"><span>Notify me when a strip is done</span><input type="checkbox" id="s-notify_on"></label>
 <div id="notifyways">
 <p class="hint">Pick one or more ways, then press Send a test.</p>
 <label class="row"><span>Banner on this Mac</span><input type="checkbox" id="s-notify_mac"></label>
@@ -246,16 +323,19 @@
 <ul class="how">
 <li><b>Banner on this Mac</b>: tick it and press Send a test. If no banner shows, open System Settings › Notifications and allow notifications for Script Editor (macOS shows the app's banners under that name).</li>
 <li><b>Run a shortcut</b>: in the Shortcuts app, make a shortcut that receives text and does something with it, for example Send Message to your phone or Show Notification. Type its name here; the list suggests your shortcuts.</li>
-<li><b>ntfy</b>: install the free ntfy app on your phone and subscribe to a topic with a name nobody would guess. Type the same name here. The message goes through the public ntfy.sh server, so it leaves out your film notes.</li>
+<li><b>ntfy</b>: install the free ntfy app on your phone and subscribe to a topic with a name nobody would guess. Type the same name here. The notification goes through the public ntfy.sh server, so it leaves out your film notes.</li>
 </ul>
-</div></div>
+</div>
+</section>
+<section class="settab" data-tab="Logs">
 <div class="sub">Logs and cache</div>
+<p class="what">The app's own record of what it did, for finding out what went wrong.</p>
 <label class="row"><span>Keep logs for (days)</span><input type="number" id="s-log_days" min="0" max="3650" step="1"></label>
 <p class="help">The app writes down everything it does, every error, and what the scanner reports, in the <code>logs</code> folder next to the app (one file a day, in JSON). Older files are deleted. 0 keeps them all.</p>
 <p class="hint" id="loginfo"></p>
 <div class="btnrow"><button id="b-openlogs">Show logs folder</button><button id="b-clearcache" title="Forget the kept strip, the re-develop pictures and Python's compiled files. Logs, settings and pictures stay.">Clear cache</button></div>
 <p class="hint" id="cachemsg" hidden></p>
-</div>
+</section>
 </dialog>
 <dialog id="zoom" aria-label="Enlarged picture"><img id="zoomimg" alt=""><span id="zoomcap"></span></dialog>
 <script src="/app.js"></script></body></html>

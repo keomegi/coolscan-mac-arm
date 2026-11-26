@@ -206,6 +206,9 @@ kbd{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(-
 #framepos{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px}
 #framepos .lbl{color:var(--ink2)}
 #framepos .hint{margin:0}
+#stripoff{display:inline-flex;align-items:center;gap:6px}
+#stripoff .lbl{color:var(--ink2)}
+#stripoffval{min-width:3.2em;text-align:center;font-variant-numeric:tabular-nums}
 .tile .moved{position:absolute;left:6px;bottom:6px;font-size:11px;font-weight:600;padding:1px 6px;border-radius:9px;background:rgba(0,0,0,.62);color:#ffd60a}
 
 /* Additional settings: how to set up each way of sending a message */
@@ -257,7 +260,7 @@ ul.how li{margin:0 0 6px}
 .archtoggle:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
 
 /* the learning report (Additional settings › Auto crop learning) */
-#croplearnreport{font-size:13px}
+#croplearnreport,#turnlearnreport{font-size:13px}
 .clrow{padding:6px 0;border-top:1px solid var(--line2)}
 .clrow>b{display:block;font-weight:600;margin-bottom:2px}
 .clrow code{overflow-wrap:anywhere}
@@ -276,3 +279,189 @@ table.clr th:first-child,table.clr td:first-child{padding-left:0}
 button.gear{font-size:17px;line-height:1;width:32px;height:30px;padding:0}
 .tile .skipped{position:absolute;left:6px;top:6px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;background:#d70015;color:#fff}
 .tile .skipped:empty{display:none}
+/* the scan queue, while a strip is scanned */
+#queue{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0 0 10px;font-size:12px}
+#queue[hidden]{display:none}
+#queue .lbl{font-weight:600}
+#qitems{display:flex;flex-wrap:wrap;gap:6px}
+.qitem{display:inline-flex;align-items:center;gap:4px;padding:1px 4px 1px 8px;border-radius:11px;background:var(--line2);color:var(--ink);line-height:20px}
+.qitem.done{background:var(--ok);color:#fff;padding-right:8px}
+.qitem.failed{background:#d70015;color:#fff;padding-right:8px}
+.qitem.scanning{background:var(--accfill);color:#fff;padding-right:8px}
+.qbtn{border:0;background:transparent;color:inherit;font-size:13px;line-height:18px;padding:0 4px;min-height:0;border-radius:8px;cursor:pointer}
+.qbtn:hover{background:rgba(0,0,0,.12)}
+
+/* a turn auto rotate made by itself, waiting for Accept or Reject */
+.tile.auto{border-color:#bf5af2}
+.tile.auto.cur{border-color:var(--acc);box-shadow:inset 0 0 0 2px #bf5af2}
+.tile .autoturn{position:absolute;right:6px;bottom:6px;display:flex;align-items:center;gap:4px;padding:3px 4px 3px 8px;border-radius:9px;background:rgba(28,28,30,.86);border:1px solid #bf5af2;font-size:11px}
+.tile .autoturn[hidden]{display:none}
+.tile .autoturn .atwords{color:#e0b3ff;font-weight:700}
+.tile .atbtn{font-size:11px;padding:1px 7px;border-radius:7px;border:0;cursor:pointer}
+.tile .atbtn.ok{background:#30d158;color:#1c1c1e}
+.tile .atbtn.no{background:rgba(255,255,255,.16);color:#fff}
+.tile .atbtn:hover{filter:brightness(1.12)}
+#stripturn{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;padding:6px 8px 6px 10px;border-radius:9px;background:rgba(191,90,242,.14);border:1px solid #bf5af2;font-size:12px}
+#stripturn[hidden]{display:none}
+#filmwarn{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;padding:6px 8px 6px 10px;border-radius:9px;background:rgba(255,159,10,.16);border:1px solid #ff9f0a;font-size:12px}
+#filmwarn[hidden]{display:none}
+#filmwarntext{flex:1 1 260px;font-weight:600}
+#filmwarn .atbtn{font-size:12px;padding:2px 9px;border-radius:7px;border:0;cursor:pointer}
+#filmwarn .atbtn.ok{background:#ff9f0a;color:#1c1c1e}
+#filmwarn .atbtn.no{background:rgba(127,127,127,.25);color:inherit}
+#stripturntext{flex:1 1 220px;font-weight:600}
+#stripturn .atbtn{font-size:12px;padding:2px 9px;border-radius:7px;border:0;cursor:pointer}
+#stripturn .atbtn.ok{background:#30d158;color:#1c1c1e}
+#stripturn .atbtn.no{background:rgba(127,127,127,.25);color:inherit}
+
+/* ---- 2026-11-25: the frames in a column with the big picture beside them; grey behind pictures, as on the
+   Scanned pictures page (never black); the same blue edge and thin green crop box as there */
+:root{--stage:#c4c4c9;--stageink:#1d1d1f;--stageink2:#48484a;--edge:#1e78ff;--cropc:#22c55e;--mine:#8a3200}
+@media (prefers-color-scheme:dark){:root{--stage:#5b5b60;--stageink:#f5f5f7;--stageink2:#d1d1d6;--mine:#ffd60a}}
+@media (min-width:1080px){
+  body.main #work{display:grid;grid-template-columns:minmax(250px,300px) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;overflow:hidden;padding-bottom:12px}
+  body.main #frames,body.main #viewer{overflow:auto;min-height:0}
+  body.main #viewer{display:flex;flex-direction:column}
+  body.main #stage{flex:1 1 0;min-height:240px;container-type:size}
+  body.main #big{max-width:calc(100cqw - 22px);max-height:calc(100cqh - 22px)}
+  body.main #tiles{grid-template-columns:1fr;gap:8px}
+  body.main .tile .pic{height:104px}
+}
+body.main #frames .head{flex-wrap:wrap;gap:6px 8px}
+body.main #frames .head label.check{flex:1 1 100%;order:5;margin:0}
+body.main #frames .head #framesum{flex:1 1 100%;order:4}
+#qbtns{display:inline-flex;gap:8px;flex-wrap:wrap}
+#qbtns[hidden]{display:none}
+body.main #frames .head #qbtns{flex:1 1 100%;order:3}
+body.main #queue .hint{flex:1 1 100%;margin:0}
+.tile{grid-template-columns:minmax(96px,1fr) minmax(0,1.3fr)}
+.tile .side{color:var(--stageink);border-right:0}
+.tile .side .tick,.tile .tick{background:rgba(0,0,0,.14);color:var(--stageink)}
+.tile.ticked .tick{background:var(--accfill);color:#fff}
+.tile .own{background:rgba(0,0,0,.1);color:var(--stageink2)}
+.tile ul.fs{color:var(--stageink2)}
+.tile ul.fs li{display:none}                 /* only what differs from the other frames is listed */
+.tile ul.fs li.mine{display:list-item;color:var(--mine)}
+.tile .fsbtn{display:none}                   /* one button for it: "Settings for this frame…" under the picture (S) */
+.tile .none,#stage .hint{color:var(--stageink2)}
+.tile.cur{border-color:var(--edge)}
+#stage{padding:11px}
+.imgw{overflow:visible}
+.imgw::after{content:"";position:absolute;inset:-3px;border:1px dashed var(--edge);pointer-events:none;z-index:1}
+.imgw[hidden]::after{display:none}
+#stage{overflow:hidden}
+/* the crop box: a thin green line; its handles only while Crop is open */
+#cropbox{border:1.2px solid var(--cropc);box-shadow:0 0 0 .6px rgba(0,0,0,.35);pointer-events:none;cursor:default;z-index:2}
+body.cropping #cropbox{pointer-events:auto;cursor:move;box-shadow:0 0 0 .6px rgba(0,0,0,.35),0 0 0 9999px rgba(0,0,0,.4)}
+#cropbox .h{display:none}
+body.cropping #cropbox .h{display:block}
+#cropbox .h::after{background:var(--cropc);box-shadow:0 0 0 1px #0b3d1c}
+#cropbox .n::after,#cropbox .s::after{width:22px;height:5px;margin-left:-11px}
+#cropbox .n::after{top:5.5px}#cropbox .s::after{bottom:5.5px}
+#cropbox .e::after,#cropbox .w::after{width:5px;height:22px;margin-top:-11px}
+#cropbox .w::after{left:5.5px}#cropbox .e::after{right:5.5px}
+#cropbox .nw::after,#cropbox .ne::after,#cropbox .sw::after,#cropbox .se::after{width:8px;height:8px}
+#cropbox .nw::after{left:6px;top:6px}#cropbox .ne::after{right:6px;top:6px}
+#cropbox .sw::after{left:6px;bottom:6px}#cropbox .se::after{right:6px;bottom:6px}
+
+/* the page switch, the same on every page: Scan · Scanned pictures · Re-develop */
+nav.pages{display:inline-flex;align-self:center;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none;background:var(--panel)}
+nav.pages a{padding:4px 12px;color:var(--ink);text-decoration:none;font-size:13px;line-height:20px;border-left:1px solid var(--line);white-space:nowrap}
+nav.pages a:first-child{border-left:0}
+nav.pages a:hover{background:var(--line2)}
+nav.pages a[aria-current=page]{background:var(--accfill);color:var(--accink);font-weight:600}
+.brand{align-items:center}
+/* the i next to the Archive mode switch */
+button.infobtn{flex:none;width:22px;height:22px;padding:0;border-radius:50%;font:italic 600 13px Georgia,"Times New Roman",serif;color:var(--acc);border-color:var(--acc);margin-left:-8px}
+#archdlg{max-width:min(92vw,500px)}
+#archdlg p{margin:8px 0}
+ul.plain{margin:6px 0;padding-left:18px}
+ul.plain li{margin:4px 0}
+/* /?settings=1: the Settings window alone, shown in a frame by the other pages */
+body.setonly>header,body.setonly>main{display:none}
+body.setonly{background:var(--panel)}
+body.setonly #setdlg{width:100%;max-width:100%;height:100%;max-height:100%;margin:0;border:0;border-radius:0;box-shadow:none}
+body.setonly #setdlg::backdrop{background:var(--panel)}
+#setframe{padding:0;width:min(94vw,580px);max-width:min(94vw,580px);height:88vh;overflow:hidden}
+#setframe iframe{display:block;width:100%;height:100%;border:0}
+
+/* the top bar: name, page switch, Archive mode and the scanner buttons on one line; the scanner's state starts the next line */
+#bar .brand{display:contents}
+#bar h1{flex:none}
+#bar nav.pages{margin-right:auto}
+#bar #status{flex:1 1 140px;min-width:0}
+body.main #bar #status{order:1;flex:0 1 auto;max-width:46%;white-space:nowrap;font-size:12px;line-height:18px}
+body.main #setline{order:1;flex:1 1 320px}
+body.main #actline{order:2}
+body.main #activity{order:3}
+#bar .tools a{color:var(--acc);text-decoration:none}
+/* the big picture's own bar */
+body.main #vinfo{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.cropping #b-sharper,body.cropping #b-zoom{display:none}
+#framepos .grow{flex:1}
+#framepos label.check{margin:0}
+
+/* the Settings window: tabs along the top, one shown at a time; in a tab, groups with a heading, a short
+   line that is always shown (.what) and the longer explanations behind the group's ? */
+#setdlg{width:min(94vw,780px);max-width:min(94vw,780px);height:min(88vh,640px);max-height:88vh;overflow:hidden;display:none;flex-direction:column;padding-bottom:0}
+#setdlg[open]{display:flex}
+#setdlg .dlghead{flex:none;border-bottom:0;padding-bottom:4px}
+#setdlg code{font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+#setbody{flex:1;min-height:0;display:flex;flex-direction:column}
+#setnav{flex:none;display:flex;flex-wrap:wrap;gap:0 2px;border-bottom:1px solid var(--line2)}
+#setnav button{height:auto;padding:6px 10px 7px;white-space:nowrap;border:0;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;background:transparent;color:var(--ink2);margin-bottom:-1px}
+#setnav button:hover{background:var(--line2);color:var(--ink)}
+#setnav button[aria-selected=true]{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
+#setpane{flex:1;min-height:0;overflow:auto;padding:4px 4px 16px 0}
+#setpane .settab{border:0;padding:0;margin:0}
+#setpane .setgrp{padding:12px 0 10px;border-top:1px solid var(--line2)}
+#setpane .setgrp:first-child{border-top:0}
+#setpane .setgrp>.sub{display:flex;align-items:center;justify-content:space-between;border-top:0;padding-top:0;margin:0 0 4px;font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:0}
+#setpane .what{color:var(--ink2);font-size:12px;margin:0 0 8px}
+#setpane .q{flex:none;width:20px;height:20px;padding:0;border-radius:50%;font-size:12px;font-weight:600;color:var(--ink2)}
+#setpane .q[aria-expanded=true]{background:var(--accfill);border-color:var(--accfill);color:var(--accink)}
+#setdlg .setgrp .help,#setdlg .setgrp p.hint:not([id]),#setdlg .setgrp ul.how{display:none}
+#setdlg .setgrp.showhelp .help,#setdlg .setgrp.showhelp p.hint:not([id]),#setdlg .setgrp.showhelp ul.how{display:block}
+#setpane details.card{border:0;margin:0;background:transparent}
+#setpane details.card>summary{display:none}
+#setpane details.card .body{padding:0}
+#setpane select,#setpane input[type=text],#setpane input[type=number]{width:230px}
+#setpane .inline input.grow{width:auto}
+#setpane .btnrow{justify-content:flex-start;margin-top:6px}
+details.clmore{margin-top:8px}
+details.clmore>summary{cursor:pointer;color:var(--ink2);font-size:12px}
+body.setonly #setdlg{height:100%;max-height:100%;width:100%;max-width:100%}
+#setframe{width:min(94vw,780px);max-width:min(94vw,780px);height:min(88vh,640px)}
+/* 10: Connect, Load and Eject are buttons and look like it; while something runs its times are not cut short */
+body.main .quiet button{border-color:var(--line);background:var(--panel);color:var(--ink);padding:0 10px}
+body.main #busy{flex:0 0 auto}
+body.main #timing{overflow:visible;flex:none}
+#bar nav.pages a{color:var(--ink);text-decoration:none;padding:4px 12px}
+#bar nav.pages a:hover{text-decoration:none}
+#bar nav.pages a[aria-current=page]{color:var(--accink)}
+#cropbox{box-shadow:0 0 0 .6px rgba(0,0,0,.35),0 0 0 9999px rgba(0,0,0,.28)}
+#framepos label.check{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12px;cursor:pointer}
+body.cropping #framepos{display:none}
+.imgw{clip-path:inset(-5px)}
+/* a frame's place in the scan that is running, on its card */
+.tile .qplace{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;font-weight:600}
+.tile .qplace .qtext{padding:1px 7px;border-radius:9px;background:rgba(0,0,0,.14);color:var(--stageink)}
+.tile .qplace.scanning .qtext{background:var(--accfill);color:#fff}
+.tile .qplace.done .qtext{background:var(--ok);color:#fff}
+.tile .qplace.failed .qtext{background:#d70015;color:#fff}
+.tile .qsoon{height:20px;padding:0 7px;font-size:11px;border-radius:9px}
+#fs-when{margin:8px 0 0;color:var(--warn)}
+
+/* a long strip (an SA-30 roll, a holder with several strips; never the LS-40's SA-21): one row of bigger frames that scrolls */
+#tiles.long{display:flex;overflow-x:auto;overscroll-behavior-x:contain;padding-bottom:8px}
+#tiles.long .tile{flex:0 0 max(380px,calc(50% - 6px))}
+#tiles.long .tile .pic{height:200px}
+#longnav{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:6px}
+#longnav[hidden]{display:none}
+/* with the frames in a column beside the big picture (wide window), a long strip just scrolls down the column */
+@media (min-width:1080px){
+  body.main #tiles.long{display:grid;overflow-x:visible;padding-bottom:0}
+  body.main #tiles.long .tile{flex:none}
+  body.main #tiles.long .tile .pic{height:104px}
+  body.main #longnav{display:none}
+}

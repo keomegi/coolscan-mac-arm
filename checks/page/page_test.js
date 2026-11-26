@@ -51,13 +51,14 @@ const now = new Date(); const D = '' + now.getFullYear() + String(now.getMonth()
   const box = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   await p.mouse.move(box.x + box.w * 0.2, box.y + box.h * 0.2); await p.mouse.down(); await p.mouse.move(box.x + box.w * 0.5, box.y + box.h * 0.5, { steps: 4 });
   await p.mouse.move(box.x + box.w * 0.8, box.y + box.h * 0.7, { steps: 4 }); await p.mouse.up();
-  await p.waitForFunction(() => !document.getElementById('b-cropclear').hidden);
+  await p.click('#b-cropdone');   // the box is kept with Done, as on the Scanned pictures page
+  await p.waitForFunction(() => !document.getElementById('cropbox').hidden && document.getElementById('b-crop').textContent === 'Crop');
   out.crop = { state: (await state()).tiles[2].crop, pressed: await p.getAttribute('#b-crop', 'aria-pressed'), boxShown: await p.isVisible('#cropbox'),
     boxAt: await p.$eval('#cropbox', e => [e.style.left, e.style.top, e.style.width, e.style.height].map(v => Math.round(parseFloat(v)))) };
   await p.screenshot({ path: shotDir + '/crop.png' });
   // 6 scan frame 3 at a low resolution: the big picture becomes the scan
   await p.selectOption('#s-dpi', '145');
-  await p.uncheck('#s-crop_scan');  // the whole frame is scanned and cut when saved, so the picture becomes the scan (page_crop_scan.js has the other way)
+  await p.evaluate(s => openSettings(s), 'Save as'); await p.waitForTimeout(200); await p.uncheck('#s-crop_scan'); await p.click('#b-setdone'); await p.waitForTimeout(200);  // the whole frame is scanned and cut when saved, so the picture becomes the scan (page_crop_scan.js has the other way)
   await p.check('.tile[data-i="2"] input'); out.scanLabel = await txt('b-scan');
   await p.click('#b-scan');
   await p.waitForFunction(() => !document.getElementById('busy').hidden && document.getElementById('timing').textContent.includes('on this strip'), null, { timeout: 20000 });

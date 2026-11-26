@@ -1,5 +1,6 @@
 """The app log (JSON Lines in logs/), scanner codes in plain words, log history and Clear cache."""
 import json, os, sys, tempfile, time, threading, traceback
+os.environ.setdefault("COOLSCAN_LEARN_DIR", tempfile.mkdtemp(prefix="coolscan-learn-"))   # learning: never the person's own
 from pathlib import Path
 home = tempfile.mkdtemp(); os.environ["HOME"] = home
 pkg = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).resolve().parents[2])

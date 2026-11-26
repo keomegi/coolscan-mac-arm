@@ -86,3 +86,32 @@ def test_mac_app_files():
 def test_build_script_parses():
     r = subprocess.run(["bash", "-n", str(ROOT / "mac" / "build_app.sh")], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="no bash")
+def test_setup_script():
+    """setup.sh makes .venv for both ways of starting; the app's builder runs it when .venv is missing."""
+    setup = ROOT / "setup.sh"
+    assert setup.is_file()
+    r = subprocess.run(["bash", "-n", str(setup)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "requirements.txt" in setup.read_text()
+    assert "setup.sh" in (ROOT / "mac" / "build_app.sh").read_text()
+
+
+def test_starter_switches_to_the_folders_environment(tmp_path):
+    """Started with a Python that has no numpy, coolscan.py carries on with .venv/bin/python next to it."""
+    shutil.copy2(ROOT / "coolscan.py", tmp_path / "coolscan.py")
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    fake = tmp_path / ".venv" / "bin" / "python"
+    fake.write_text('#!/bin/sh\necho "IN_VENV $COOLSCAN_IN_VENV $@"\n')
+    fake.chmod(0o755)
+    # -S -I: no site-packages, so numpy cannot be found, as in a Python it was never installed into
+    r = subprocess.run([sys.executable, "-S", "-I", str(tmp_path / "coolscan.py"), "--demo"],
+                       capture_output=True, text=True, timeout=30)
+    assert "IN_VENV 1" in r.stdout and "--demo" in r.stdout, r.stdout + r.stderr
+    # and with no .venv it says what to do
+    shutil.rmtree(tmp_path / ".venv")
+    r = subprocess.run([sys.executable, "-S", "-I", str(tmp_path / "coolscan.py"), "--demo"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0 and "setup.sh" in r.stderr

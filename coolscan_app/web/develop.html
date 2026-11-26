@@ -1,5 +1,5 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan re-develop</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Coolscan: re-develop</title>
 <link rel="stylesheet" href="/style.css">
 <style>
 /* the re-develop page: one column; RAW files, how to develop them, a look at one, saving */
@@ -42,22 +42,17 @@ body.cropping #over{cursor:cell}
 #zoomimg.pixels{image-rendering:pixelated;width:min(96vw,960px);max-height:none}
 </style></head><body>
 <header id="bar">
-<div class="brand"><h1>Coolscan re-develop</h1><span id="status" role="status" aria-live="polite">starting…</span></div>
+<div class="brand"><h1>Coolscan</h1><nav class="pages" aria-label="Pages"><a href="/">Scan</a><a href="/library" title="Browse the pictures you have scanned, roll by roll">Scanned pictures</a><a href="/develop" aria-current="page" title="Make pictures again from their RAW files, without scanning">Re-develop</a></nav><span id="status" role="status" aria-live="polite">starting…</span></div>
 <div class="tools" role="toolbar" aria-label="Re-develop">
 <button class="primary" id="b-run" title="Develop the ticked files (or all of them) into a new folder">Develop all files</button>
 <button id="b-stop" disabled title="Stop after the current file">Stop</button>
 <span class="gap"></span>
-<a href="/library" title="Past scans: tag pictures ↻ Re-develop there">Library</a>
-<a href="/" title="Back to scanning">Scanning screen</a>
+<button class="icon gear" id="b-settings" title="Settings (⌘,)" aria-label="Settings">⚙</button>
 </div>
 <div id="busy" hidden><progress id="prog" value="0" max="1" aria-label="Progress"></progress><span id="progtxt"></span></div>
 </header>
 <main class="dev">
 
-<section aria-label="Tagged in the Library" id="tagged" hidden>
-<div class="head"><h2>Tagged in the Library</h2><span class="hint">Pictures you tagged ↻ Re-develop in the <a href="/library">Library</a>. Open a roll's tagged pictures here: they come up ticked, ready to develop.</span></div>
-<ul class="taglist" id="taglist"></ul>
-</section>
 
 <section aria-label="RAW files">
 <div class="head"><h2>1. RAW files</h2><span class="hint">Archive mode keeps the untouched scan with its infrared in each roll's RAW folder. Pick a roll, or type a folder.</span></div>
@@ -109,7 +104,6 @@ body.cropping #over{cursor:cell}
 <section aria-label="Save">
 <div class="head"><h2>4. Save</h2><span class="hint">Each run saves into a new folder, Re-developed/&lt;date and time&gt; inside the roll's folder, with the same file names as the RAW files and a Develop log.txt. Nothing is ever overwritten.</span></div>
 <label class="tickrow"><input type="checkbox" id="extras"> Also save the in-between steps, to compare them: the file with the dust removed as scanned (not inverted), and the finished picture without dust removal</label>
-<label class="tickrow"><input type="checkbox" id="untag"> Take the Library's ↻ Re-develop tag off each picture once it is developed</label>
 <div id="results"></div>
 </section>
 

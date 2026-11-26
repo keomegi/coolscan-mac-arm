@@ -157,12 +157,26 @@ class ScanMixin:
         done, failed, ending = 0, [], "completed"
         strip_started = time.time()
         self.timing = {"strip_started": strip_started, "of": len(indices), "done": 0}
+        # the queue: frames waiting, being scanned, done or failed. The page can take a waiting frame
+        # out, add one at the end (also one scanned already, to scan it again) or move one earlier,
+        # while the strip is scanned (queue_change)
+        with self.lock:
+            self.scan_queue = [{"i": i, "state": "waiting"} for i in indices]
+        queue = self.scan_queue
         roll = (st["roll"] if st["use_roll"] else "") or outdir.name
         roll_plain = (re.match(r"Roll \d+", roll) or [roll])[0]
         try:
-            for i in indices:
+            while True:
                 if self.cancel:
                     raise Cancelled
+                with self.lock:
+                    item = next((it for it in queue if it["state"] == "waiting"), None)
+                    if item is None:
+                        break
+                    item["state"] = "scanning"
+                    self.timing["of"] = len(queue)
+                    self.version += 1
+                i = item["i"]
                 n = self._next_number(name_folders, n)
                 stem = self._stem(folders, n)
                 saved = []
@@ -170,6 +184,7 @@ class ScanMixin:
                 frame_started = time.time()
                 self.frame_times = {}
                 self.timing.update(frame=i + 1, frame_started=frame_started)
+                sig = self.scan_signature(i)   # what it is scanned with: asked about if scanned the same again
                 try:
                     self._scan_one_as_set(s, d, i, n, stem, job, saved)   # with the frame's own settings, if it has any
                 except Exception as e:  # noqa: BLE001
@@ -184,13 +199,18 @@ class ScanMixin:
                     if st["stop_on_errors"] or not _this_frame_only(e):
                         raise
                     failed.append(i + 1)
+                    item["state"] = "failed"
                     self.say(f"frame {i + 1} failed, carrying on with the next one. {explain(e)}")
                     continue
                 log("Saved as " + ", ".join(saved))
+                item["state"] = "done"
                 done += 1
                 n += 1
                 took = time.time() - frame_started
-                self.frame_saved.setdefault(i, []).append({"files": list(saved), "took": took})
+                self.frame_saved.setdefault(i, []).append({"files": list(saved), "took": took, "folder": str(outdir),
+                                                          "crop": self.crops.get(i), "turns": self._turns(i), "sig": sig})
+                if hasattr(self, "turnlearn_frame_saved"):   # a turn kept through the scan is learned from (turnlearning.py)
+                    self.turnlearn_frame_saved(i, [outdir / f for f in saved])
                 words, waited = self._frame_times_text(took)
                 self.say(f"frame {i + 1} done in {words}")
                 if waited:
@@ -206,6 +226,9 @@ class ScanMixin:
             self.notify(words % roll, words % roll_plain)
             raise
         finally:
+            indices = [it["i"] for it in queue]   # what the queue held in the end, for the words below
+            with self.lock:
+                self.scan_queue = None
             self.batch_day = None
             strip_took = time.time() - strip_started
             self.timing = {"last_strip": {"frames": done, "of": len(indices), "seconds": strip_took,
@@ -227,6 +250,66 @@ class ScanMixin:
                 self.say("not ejecting, because a frame failed and you may want to scan it again")
             else:
                 self.eject()
+
+    def queue_change(self, action, frame):
+        """While a strip is scanned: "remove" a waiting frame, "add" one at the end (a frame done or
+        failed already is scanned again), or move a waiting one "earlier"."""
+        with self.lock:
+            queue = getattr(self, "scan_queue", None)
+            d = self.discovery
+            if queue is None:
+                return {"ok": False, "error": "No scan is running."}
+            frame = int(frame)
+            waiting = [it for it in queue if it["state"] == "waiting"]
+            mine = next((it for it in waiting if it["i"] == frame), None)
+            if action == "remove":
+                if mine is None:
+                    return {"ok": False, "error": f"Frame {frame + 1} is not waiting in the queue."}
+                queue.remove(mine)
+                words = f"frame {frame + 1} taken out of the queue"
+            elif action == "add":
+                if d is None or not 0 <= frame < len(d.frames):
+                    return {"ok": False, "error": "That frame is not on this strip."}
+                if mine is not None or any(it["i"] == frame and it["state"] == "scanning" for it in queue):
+                    return {"ok": False, "error": f"Frame {frame + 1} is in the queue already."}
+                again = any(it["i"] == frame for it in queue)
+                queue.append({"i": frame, "state": "waiting"})
+                words = f"frame {frame + 1} added to the queue" + (" (to be scanned again)" if again else "")
+            elif action == "earlier":
+                if mine is None:
+                    return {"ok": False, "error": f"Frame {frame + 1} is not waiting in the queue."}
+                k = waiting.index(mine)
+                if k == 0:
+                    return {"ok": True}
+                a, b = queue.index(waiting[k - 1]), queue.index(mine)
+                queue[a], queue[b] = queue[b], queue[a]
+                words = f"frame {frame + 1} moved earlier in the queue"
+            else:
+                return {"ok": False, "error": "Unknown change."}
+            self.timing["of"] = len(queue)
+            self.version += 1
+        self.say(words)
+        return {"ok": True}
+
+    def queue_add_many(self, frames):
+        """Add several frames to the running scan; frames in it already are passed over."""
+        added, errors = [], []
+        for i in frames:
+            r = self.queue_change("add", i)
+            (added if r.get("ok") else errors).append(i if r.get("ok") else r.get("error", ""))
+        if not added:
+            return {"ok": False, "error": errors[0] if errors else "Tick a frame first."}
+        return {"ok": True, "added": added}
+
+    def queue_remove_many(self, frames):
+        """Take several waiting frames out of the running scan; frames not waiting are passed over."""
+        gone, errors = [], []
+        for i in frames:
+            r = self.queue_change("remove", i)
+            (gone if r.get("ok") else errors).append(i if r.get("ok") else r.get("error", ""))
+        if not gone:
+            return {"ok": False, "error": errors[0] if errors else "Tick a frame first."}
+        return {"ok": True, "removed": gone}
 
     def _frame_times_text(self, took):
         """How long a frame took, in words, and (when the driver said) whether the scanner had to wait."""
@@ -278,7 +361,7 @@ class ScanMixin:
         add(f"Settings: {st['dpi']} dpi, {st['samples']} sample(s), {space}, "
             f"dust removal {'on' if st['clean'] else 'off'}" + (", archive mode" if st["archive"] else "")
             + (f", Multi-Exposure {st['multi_exposure']}x" if int(st["multi_exposure"] or 0) in (2, 4) else "")
-            + (f', film profile "{st["film_profile"]}"' if self._film_profile() is not None else ""))
+            + (", colour of negatives: " + self.roll_colour_words() if self._film_profile() is not None else ""))
         add(f"Frames to scan: {count}")
         return add
 
@@ -301,6 +384,8 @@ class ScanMixin:
         if want > max(1, int(getattr(self.caps, "max_samples", 1) or 1)):
             passes, want = min(want, 4), 1  # the scanner reads a line once: average whole passes instead
         base = dict(dpi=int(st["dpi"]), samples=want, progress=self._progress)
+        if st.get("superfine") and getattr(self.caps, "multi_line", False):
+            base["superfine"] = True  # LS-5000: one CCD line at a time (slower, no line-to-line banding)
         # with a crop (and not in Archive mode) the scanner reads only the crop: see _scan_rect
         frame, windowed = self._scan_rect(i, d.frames[i], job["archive"])
         if windowed:
@@ -363,9 +448,11 @@ class ScanMixin:
                      + (f", {passes} passes" if passes > 1 else "") + (f", Multi-Exposure {longer}x" if longer else ""))
             r = take(infrared=True, clean=False)
             raw = as_scanned(r)
+            if hasattr(self, "turnlearn_scan_taken"):
+                self.turnlearn_scan_taken(i, raw)   # auto rotate looks at the scan itself before the files are written (turnlearning.py)
             planes4 = turned(raw) + ([self._rot(r.ir, i)] if r.ir is not None else [])
             write_tiff(raw_dir / f"{stem}.tif", planes4, r.dpi, icc,
-                       meta={**meta, "coolscan": self._scan_note(i, r, planes4[0].shape)})
+                       meta={**meta, "coolscan": self._scan_note(i, r, planes4[0].shape), "thumb_pass": self._thumb_pass(i)})
             saved.append(f"RAW/{stem}.tif")
             self.say(f"saved RAW/{stem}.tif" + ("" if r.complete else " (warning: pass came back short)"))
             if r.ir is None:
@@ -395,6 +482,8 @@ class ScanMixin:
                  + (f", Multi-Exposure {longer}x" if longer else "") + (", cleaning dust" if in_pass else ""))
         r = take(infrared=infrared, clean=in_pass)
         planes = as_scanned(r)
+        if hasattr(self, "turnlearn_scan_taken"):
+            self.turnlearn_scan_taken(i, planes)   # auto rotate looks at the scan itself before the files are written (turnlearning.py)
         if method and not in_pass:
             planes = self.clean_planes(planes, r.ir, r.dpi, i)
         whole = planes
@@ -427,6 +516,25 @@ class ScanMixin:
         if r.cleaned is not None:
             self.say(f"dust removal rebuilt {r.cleaned} pixels")
         self._show_scan(i, whole, r, saved[0] if saved else "", planes, windowed)
+
+    def _thumb_pass(self, i):
+        """Frame i's piece of the thumbnail pass (as the scanner sent it: a negative stays one), turned
+        like its RAW file, which keeps it inside (a private tag): auto rotate learns from it how a frame
+        looks with few pixels. None without one."""
+        d = getattr(self, "discovery", None)
+        try:
+            if self.testing or d is None or d.thumbnail is None:
+                return None
+            b = self._thumb_tile_bounds(i)
+            if b is None:
+                return None
+            first, last, upper, lower = b
+            planes = [np.asarray(d.thumbnail[k][upper:lower, first:last]) for k in ("red", "green", "blue", "gray", "grey")
+                      if k in d.thumbnail]
+            return [self._rot(p, i) for p in planes] or None
+        except Exception:  # noqa: BLE001 - an extra
+            traceback.print_exc()
+            return None
 
     def _scan_note(self, i, r, shape):
         """What a file as scanned keeps about how it was made, so it can be developed again later
@@ -469,7 +577,7 @@ class ScanMixin:
             return ""
         if not getattr(r, "exposures", None):
             return ", film profile not used (the pass has no exposures)"
-        return f', film profile "{self.settings["film_profile"]}"'
+        return ", colour of negatives: " + self.roll_colour_words()
 
     def _crop_words(self, i, planes, windowed=False):
         if not self.crops.get(i):

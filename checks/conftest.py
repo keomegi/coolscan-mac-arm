@@ -46,6 +46,7 @@ def copy_app(dest, without_optional=False):
 def clean_env(home):
     env = dict(os.environ, HOME=str(home), PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1")
     env.pop("PYTHONPATH", None)
+    env.setdefault("COOLSCAN_TURN_BASE", "off")   # auto rotate's ready-made model (80 MB) is never fetched by a check
     return env
 
 

@@ -2,13 +2,15 @@
 (and from the crops kept in the Library), and cropping with what was learned. The learning itself is
 in imaging/croplearn.py (and the picture network in imaging/cropcnn.py).
 
-Setting "auto_crop_learn" (Additional settings, on by default): off, no crops are kept, nothing is
-learned by itself and auto crop uses only the built-in rule. The "Learn from my crops" button learns
+Setting "auto_crop_learn" (Settings, Crop, on by default): off, no crops are kept and nothing is
+learned by itself; auto crop goes on using the model that is there (the one that came with the app,
+or what was learned before: "Reset to default" drops that). The "Learn from my crops" button learns
 whatever the setting says.
 """
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from .imaging.croplearn import CropLearner, MIN_PICTURES
 
@@ -24,10 +26,9 @@ class CropLearningMixin:
 
     # -- cropping with it
     def learned_crop(self, planes, rule_rect, film=None, raw=True):
-        """The crop learned from the person's crops, or None (not on, nothing learned yet, or no better
-        than the rule): then the rule's crop stands. planes: colour planes, 0..65535."""
-        if not self._croplearn_on():
-            return None
+        """The crop learned from the person's crops, or None (nothing learned yet, or no better
+        than the rule): then the rule's crop stands. Used whether or not learning is on: the switch
+        only stops keeping and learning from the person's own crops. planes: colour planes, 0..65535."""
         return self.croplearn.crop(planes, rule_rect, film, raw)
 
     # -- keeping crops to learn from
@@ -39,20 +40,46 @@ class CropLearningMixin:
         colours = [p for k, p in planes.items() if k in ("red", "green", "blue", "gray", "grey")] or list(planes.values())
         if not colours:
             return
+        key = f"{self.croplearn_session}:{self.strip_id}:{i}"
         try:
-            new = self.croplearn.add_hand_crop(f"{self.croplearn_session}:{self.strip_id}:{i}", colours, rect,
-                                               self._film(), raw=True)
+            self.croplearn.note_step("scan:" + key, rect, "hand", f"strip {self.strip_id} frame {i + 1}")
+            new = self.croplearn.add_hand_crop(key, colours, rect, self._film(), raw=True)
         except Exception:  # noqa: BLE001 - an extra: never in the way of scanning
             traceback.print_exc()
             return
         self._croplearn_maybe(new)
 
-    def croplearn_library_crop(self):
-        """A crop kept in the Library (the picture is read from there when learning)."""
+    def croplearn_library_crop(self, path=None, edit=None):
+        """A crop kept in the Library (the picture is read from there when learning). One that is just
+        the auto crop accepted as it was is not counted: it is not learned from."""
         if not self._croplearn_on():
             return
         try:
+            if path is not None and edit and edit.get("crop"):
+                self.croplearn.note_step("lib:" + self.croplearn._path_key(path), edit["crop"], "saved", Path(path).name)
+                if self.croplearn.is_auto(path, edit["crop"]):
+                    return
             self._croplearn_maybe(self.croplearn.note_library_crop())
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    def croplearn_note_auto(self, path, rect):
+        """Auto crop proposed this crop for a Library picture: if it is kept unchanged, it is not learned from
+        (else the models would learn from their own guesses, including the bulk Auto crop's)."""
+        try:
+            self.croplearn.note_auto(path, rect)
+            if self._croplearn_on():
+                self.croplearn.note_step("lib:" + self.croplearn._path_key(path), rect, "auto", Path(path).name)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    def croplearn_scan_auto(self, i, rect):
+        """Auto crop's crop of frame i on the scanning screen: the first step towards a crop drawn by hand."""
+        if not self._croplearn_on() or not rect:
+            return
+        try:
+            self.croplearn.note_step(f"scan:{self.croplearn_session}:{self.strip_id}:{i}", rect, "auto",
+                                     f"strip {self.strip_id} frame {i + 1}")
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
@@ -84,6 +111,9 @@ class CropLearningMixin:
                 pass
             try:
                 res = self.croplearn.learn(self._croplearn_examples(), why=why)
+                if res.get("ok") and self.settings.get("crop_learn_delete_after"):
+                    gone = self.croplearn.delete_pictures()   # the person's choice: none kept once learned from
+                    res["deleted"] = gone["deleted"]
                 if res.get("ok"):
                     used = res.get("used") or {}
                     self.say("auto crop learning: " + res["text"]
@@ -101,8 +131,21 @@ class CropLearningMixin:
         self._croplearn_thread.start()
         return {"ok": True, "started": True}
 
+    def croplearn_reset(self):
+        """Settings' "Reset to default": back to the crop model that came with the app."""
+        res = self.croplearn.reset_to_shipped()
+        if res.get("ok"):
+            self.say("auto crop learning: reset to the model that came with the app")
+            with self.lock:
+                self.version += 1
+        return res
+
     def croplearn_report(self):
         rep = self.croplearn.report()
+        if hasattr(self, "turnlearn"):   # the Delete learning pictures button covers turn learning's copies too
+            tk = self.turnlearn.report()["pictures_kept"]
+            pk = rep.get("pictures_kept") or {"files": 0, "mb": 0}
+            rep["pictures_kept"] = {"files": pk["files"] + tk["files"], "mb": round(pk["mb"] + tk["mb"], 2)}
         rep["on"] = self._croplearn_on()
         rep["least"] = MIN_PICTURES
         return rep

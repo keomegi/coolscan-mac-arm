@@ -14,8 +14,8 @@ const [port, shotDir] = process.argv.slice(2);
   const box = () => p.$eval('#cropbox', e => e.hidden ? null : [e.style.left, e.style.top, e.style.width, e.style.height].map(v => Math.round(parseFloat(v))));
   const out = {};
   await p.click('.tile[data-i="1"] .pic'); await p.waitForTimeout(600);
-  out.before = { box: await box(), autoBtn: await p.isVisible('#b-autocrop'), setting: await p.isChecked('#s-auto_crop') };
-  // 1 Crop on a frame without a crop: the box is there at once, over the whole frame, with its handles
+  out.before = { box: await box(), setting: await p.isChecked('#s-auto_crop') };
+  // 1 Crop on a frame without a crop: the box is there at once, where auto crop puts it, with its handles; nothing is kept yet
   await p.click('#b-crop'); await p.waitForTimeout(500);
   await p.$eval('#stage', e => e.scrollIntoView({ block: 'center' })); await p.waitForTimeout(200);   // the frame cards can push it below the window
   out.cropMode = { box: await box(), handles: await p.$$eval('#cropbox .h', h => h.filter(x => x.getBoundingClientRect().width > 0).length), words: await p.textContent('#vsaved') };
@@ -23,20 +23,25 @@ const [port, shotDir] = process.argv.slice(2);
   // drag its left side in: that makes the crop
   const big = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   await p.mouse.move(big.x + 4, big.y + big.h / 2); await p.mouse.down(); await p.mouse.move(big.x + big.w * 0.2, big.y + big.h / 2, { steps: 6 }); await p.mouse.up();
-  await p.waitForTimeout(800);
+  await p.waitForTimeout(300);
+  out.notKeptYet = (await state()).tiles[1].crop || null;
+  await p.click('#b-cropdone'); await p.waitForTimeout(800);
   out.afterSideDrag = { crop: (await state()).tiles[1].crop, cropMode: await p.$eval('#b-crop', e => e.getAttribute('aria-pressed')) };
-  await p.keyboard.press('Escape'); await p.click('#b-cropclear'); await p.waitForTimeout(600);
-  // 2 the Auto crop button
-  await p.click('#b-autocrop'); await p.waitForTimeout(900);
+  await p.click('#b-crop'); await p.waitForTimeout(400); await p.click('#b-cropclear'); await p.waitForTimeout(600);
+  out.cleared = (await state()).tiles[1].crop || null;
+  // 2 there is no Auto crop button any more: Crop starts at auto crop's box, Done keeps it, Cancel does not
+  await p.click('#b-crop'); await p.waitForTimeout(900); out.autoBox = await box();
+  await p.keyboard.press('Escape'); await p.waitForTimeout(300); out.cancelled = (await state()).tiles[1].crop || null;
+  await p.click('#b-crop'); await p.waitForTimeout(900); await p.click('#b-cropdone'); await p.waitForTimeout(900);
   const s1 = await state();
   out.button = { crop: s1.tiles[1].crop, auto: s1.tiles[1].crop_auto, box: await box(), words: await p.textContent('#vsaved'),
     log: (await p.textContent('#log')).split('\n').filter(l => /auto crop/.test(l)).slice(-1) };
   await p.screenshot({ path: shotDir + '/auto-crop.png', clip: await p.$eval('#stage', e => { const q = e.getBoundingClientRect(); return { x: q.left, y: q.top - 50, width: q.width, height: q.height + 90 }; }) });
   // 3 the setting: every frame gets a crop; off again: they go
-  await p.check('#s-auto_crop'); await p.waitForTimeout(1200);
+  await p.evaluate(s => openSettings(s), 'Crop'); await p.waitForTimeout(200); await p.check('#s-auto_crop'); await p.waitForTimeout(1200);
   const s2 = await state();
   out.settingOn = Object.values(s2.tiles).map(t => !!t.crop && t.crop_auto);
-  await p.uncheck('#s-auto_crop'); await p.waitForTimeout(1200);
+  await p.uncheck('#s-auto_crop'); await p.waitForTimeout(1200); await p.click('#b-setdone'); await p.waitForTimeout(200);
   out.settingOff = Object.values((await state()).tiles).map(t => !!t.crop);
   out.errs = errs;
   console.log(JSON.stringify(out, null, 1));

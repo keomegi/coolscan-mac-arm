@@ -13,12 +13,15 @@ from pathlib import Path
 import numpy as np
 
 from .imaging.autocrop import find_picture
-from .scanner.strip import NUDGE, NUDGE_MOST, Strip, fit_frames
+from .scanner.strip import NUDGE, NUDGE_MOST, Strip, fit_frames, realign_frames
 from .imaging.colour import FILM_PROFILE_LEAST, display_image, shrink
 from .scanner.demo import _Demo
+from .scanner.models import LONG_STRIP, about as model_about, dpi_choices, frame_long_in, model_info, nearest_dpi
 from .imaging.develop import DevelopMixin
 from .library import LibraryMixin
+from .exporting import ExportMixin
 from .croplearning import CropLearningMixin
+from .turnlearning import TurnLearningMixin
 from .applog import AppLog
 from .scanner.driver import Cancelled, DriverLog, _lost_scanner, _stopped, clock, explain
 from .imaging.files import encode_png
@@ -82,8 +85,8 @@ def _background_priority():
         pass
 
 
-class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin, LibraryMixin,
-          CropLearningMixin):
+class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, DevelopMixin, LibraryMixin, ExportMixin,
+          CropLearningMixin, TurnLearningMixin):
     def __init__(self, demo=False):
         self.demo = demo
         self.test_mode = False       # started with --test: the test page is served as well
@@ -153,6 +156,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         self._dev_reset()           # re-develop: RAW files made into finished pictures again (develop.py)
         self._lib_reset()           # library: the scans already made, to look through (library.py)
         self._croplearn_reset()     # the learning auto crop: crops drawn by hand, learned from (croplearning.py)
+        self._turnlearn_reset()     # the learning auto rotate: turns made by hand, learned from (turnlearning.py)
 
     # -- lanes: the scanner's jobs, and re-develop beside them
     def _in_dev(self):
@@ -260,6 +264,11 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
                 "thumbnail", "film_format", "film_formats", "autofocus", "eject", "max_frames",
                 "focus_range", "revision")}
             caps["holder"] = self._holder_name()
+            info = model_info(c)
+            caps["model_name"] = info.get("name")    # "Coolscan IV ED", ... (None for a model nkscan names but the app does not know)
+            caps["multi_line"] = bool(getattr(c, "multi_line", False))
+            # 120 film and the small formats: their frame length, for the crop size estimate (35 mm: None, as before)
+            caps["frame_long_in"] = frame_long_in(self.settings.get("format") or getattr(c, "film_format", None))
         d = self.discovery
         frames = []
         boxes = []
@@ -273,6 +282,8 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         tiles = {i: {"src": self.frame_source.get(i), "v": self.picture_v.get(i, 0),
                      "info": self.preview_info.get(i, ""), "saved": self.frame_saved.get(i, []),
                      "turns": self._turns(i), "crop": self.crops.get(i), "crop_auto": i in self.crop_auto,
+                     "turn_hint": self.turn_hint.get(i) if getattr(self, "_turn_strip", None) == self.strip_id else None,
+                     "turn_auto": i in self.turn_auto and getattr(self, "_turn_strip", None) == self.strip_id,
                      "preview_skipped": getattr(self, "preview_skipped", {}).get(i),
                      "window": self._window_state(i)} for i in frames}
         return {
@@ -280,10 +291,13 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
             "dev_job": self.dev_job, "dev_progress": self.dev_progress,
             "awake": self.keep_awake.awake,
             "progress": self.progress, "log": self.log[-60:], "settings": self.shared_settings(),
+            "strip_turn": self.strip_turn if self._strip_guessed == self.strip_id else None,
             "frame_settings": self.frame_settings_state(),
+            "queue": [dict(it) for it in (getattr(self, "scan_queue", None) or [])],
             "frames": frames, "tiles": tiles, "thumb": self.thumb_png is not None, "thumb_v": self.thumb_v,
             "boxes": boxes, "presets": sorted(self.settings["presets"]), "preset": self.current_preset(),
-            "film_profiles": self.film_profiles(), "roll_measured": len(self._roll_colour()),
+            "film_profiles": self.film_profiles(), "roll_measured": sum(1 for f in self._roll_colour().values() if not (isinstance(f, dict) and f.get("own"))), "roll_colour": self.roll_colour_state(),
+            "film_warning": self.film_warning_state(),
             "profile_least": FILM_PROFILE_LEAST,
             "previews": sorted(self.previews),
             "turns": {i: self._turns(i) for i in frames}, "preview_info": self.preview_info,
@@ -507,6 +521,9 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         if d.thumbnail is None:
             if len(d.frames) == 1:
                 self.preview([0])  # a slide has no thumbnail pass, so it gets a preview scan instead
+        elif self.settings.get("auto_preview"):
+            self.say(f"film is in: previewing its {len(d.frames)} frame(s), as set in Settings")
+            self.preview(None)
 
     # -- scanner steps
     def connect(self):
@@ -517,7 +534,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
                 pass
             self.session = None
         if self.demo:
-            self.session = _Demo()
+            self.session = _Demo(os.environ.get("COOLSCAN_DEMO_MODEL") or None)
         else:
             import nkscan
             devices = nkscan.list_devices()
@@ -531,6 +548,9 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         self.say(f"connected to {c.product}{', firmware ' + firmware if firmware else ''} "
                  f"({c.optical_dpi} dpi, frames found by {c.framing}, "
                  f"thumbnail pass: {'yes' if c.thumbnail else 'no'})")
+        words = model_about(c)  # another model than the LS-40: what it is and what nkscan has run it with
+        if words:
+            self.say(words)
         many = int(getattr(c, "max_samples", 1) or 1)
         self.say(f"multi-sample: this scanner reads each line up to {many} times in one pass" if many > 1 else
                  "multi-sample: this scanner reads each line once, so 2x and 4x average that many passes")
@@ -542,14 +562,35 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
     def refresh_caps(self):
         """Copy the capabilities. Only call this on the worker thread."""
         self.caps = self.session.capabilities
+        self.fit_dpis()
         with self.lock:
             self.version += 1
         return self.caps
+
+    def fit_dpis(self):
+        """Resolutions set for another scanner (2900 and 290 are the LS-40's) move to the nearest this
+        scanner offers, so the lists on the page never show an empty choice. On the LS-40 the values
+        set there are always in its list, so nothing changes."""
+        c = self.caps
+        if c is None or self.testing:
+            return
+        choices = dpi_choices(c)
+        st = self.settings
+        for key, offered in (("dpi", choices), ("preview_dpi", [d for d in choices if d <= 1000] or choices[-1:])):
+            fit = nearest_dpi(st.get(key), offered)
+            if fit != st.get(key):
+                self.say(f"{'scan' if key == 'dpi' else 'preview'} resolution {st.get(key)} dpi is not offered by this "
+                         f"scanner: {fit} dpi instead")
+                st[key] = fit
 
     def _holder_name(self):
         c = self.caps
         if c is None:
             return None
+        d = self.discovery
+        found = len(d.frames) if d is not None and d.frames else 0
+        if found > LONG_STRIP:  # an SA-30 roll, or a holder with several strips: never the LS-40's SA-21
+            return f"film roll or long strip ({found} frames)"
         if c.framing == "perforation":
             return f"film strip (up to {c.max_frames or 6} frames)" if c.max_frames != 1 else "film strip"
         if c.max_frames == 1:
@@ -622,6 +663,8 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
     def rotate(self, indices, quarter):
         for i in indices:
             self.frame_rot[i] = (self.frame_rot.get(i, 0) + quarter) % 4
+        self.turnlearn_hand_turn(indices)   # kept to learn from (turnlearning.py)
+        self._edit_saved(indices)
         self.redraw(indices)
 
     def redraw(self, only=None):
@@ -651,6 +694,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
     def _show(self, i, planes, source, info, exposures=None):
         """Put a picture of frame i on the screen and say where it comes from."""
         self.preview_raw[i] = planes
+        self.turnlearn_frame_shown(i, source)   # the learned auto rotate: turns it when sure, else suggests (turnlearning.py)
         self.frame_exposures.pop(i, None)
         if exposures:
             self.frame_exposures[i] = dict(exposures)
@@ -662,17 +706,24 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         with self.lock:
             self.version += 1
 
-    def _show_thumbnail_tiles(self):
-        """Right after the thumbnail pass every frame gets its piece of it, so there is something to look at."""
-        d = self.discovery
+    def _thumb_tiles(self):
+        """Each frame's part of the thumbnail pass, as the scanner sent it: frame -> (planes, width, height)."""
+        d, tiles = self.discovery, {}
+        if d is None or d.thumbnail is None:
+            return tiles
         for i in range(len(d.frames)):
             b = self._thumb_tile_bounds(i)
             if b is not None:
                 first, last, upper, lower = b
-                tile = {k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}
-                self._show(i, tile, "thumbnail", f"from the thumbnail pass, {last - first}x{lower - upper} px")
+                tiles[i] = ({k: p[upper:lower, first:last] for k, p in d.thumbnail.items()}, last - first, lower - upper)
+        return tiles
 
-    def auto_crop(self, i, quiet=False):
+    def _show_thumbnail_tiles(self):
+        """Right after the thumbnail pass every frame gets its piece of it, so there is something to look at."""
+        for i, (tile, w, h) in self._thumb_tiles().items():
+            self._show(i, tile, "thumbnail", f"from the thumbnail pass, {w}x{h} px")
+
+    def auto_crop(self, i, quiet=False, save=True):
         """Auto crop: find the picture inside frame i on its picture on screen (thumbnail, preview or
         scan) and crop to it, leaving out the film's edges, the holder and the gap between frames."""
         d = self.discovery
@@ -687,6 +738,8 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         except Exception:  # noqa: BLE001 - an extra: never in the way of scanning
             traceback.print_exc()
             rect = None
+        if not save:   # only where it would crop: the Crop button's starting box, kept with Done
+            return {"ok": True, "found": rect is not None, "rect": rect}
         if rect is None:
             if i in self.crop_auto:   # an earlier guess the better picture does not bear out
                 self.crops.pop(i, None)
@@ -697,6 +750,8 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
             self.crops[i] = rect
             self.crop_auto.add(i)
             self.crop_hand.discard(i)
+            if hasattr(self, "croplearn_scan_auto"):
+                self.croplearn_scan_auto(i, rect)   # the first crop step (croplearning.py)
             if not quiet:
                 self.say(f"frame {i + 1}: auto crop keeps {rect[2] - rect[0]:.0%} x {rect[3] - rect[1]:.0%} of the frame")
         with self.lock:
@@ -754,9 +809,53 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
             if x1 - x0 >= 0.05 and y1 - y0 >= 0.05:
                 self.crops[i] = (round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4))
                 self.croplearn_hand_crop(i, self.crops[i])   # kept to learn from (Additional settings)
+                self.turnlearn_hand_crop(i)   # its turn was kept on purpose: learned from too
+        self._edit_saved([i])
         with self.lock:
             self.version += 1
         return {"ok": True, "crop": self.crops.get(i)}
+
+    def _edit_saved(self, indices):
+        """A frame scanned already on this strip, cropped or turned again on the main screen: the change is
+        kept for its saved picture as a Library edit (Library.json), the way the Library keeps one. The
+        file itself is not changed. A crop reaching past what was saved is cut to what the file holds."""
+        from .library import _turn_rect, tidy_edit
+        for i in indices:
+            entries = self.frame_saved.get(i) or []
+            last = entries[-1] if entries else None
+            if not last or "folder" not in last:
+                continue
+            s0 = last.get("crop") or (0.0, 0.0, 1.0, 1.0)
+            c = self.crops.get(i) or (0.0, 0.0, 1.0, 1.0)
+            x0, y0, x1, y1 = max(c[0], s0[0]), max(c[1], s0[1]), min(c[2], s0[2]), min(c[3], s0[3])
+            past = (x0, y0, x1, y1) != tuple(c)
+            w, h = s0[2] - s0[0], s0[3] - s0[1]
+            if x1 - x0 < 0.05 * w or y1 - y0 < 0.05 * h:
+                self.say(f"frame {i + 1}: the new crop is outside the part that was saved; press Scan to scan it again")
+                continue
+            rel = [(x0 - s0[0]) / w, (y0 - s0[1]) / h, (x1 - s0[0]) / w, (y1 - s0[1]) / h]
+            rel = _turn_rect(rel, last.get("turns") or 0)      # the file was saved turned this way
+            k = (self._turns(i) - (last.get("turns") or 0)) % 4  # turned since
+            edit = tidy_edit({"turns": k, "crop": _turn_rect(rel, k)})
+            try:
+                folder = Path(last["folder"])
+                key = str(folder.relative_to(self._lib_base())) if folder != self._lib_base() else ""
+                key = "" if key == "." else key
+                kept = []
+                for f in last["files"]:
+                    if f.startswith("RAW/") or f.endswith("_IR.tif") or not (folder / f).is_file():
+                        continue   # a RAW file is developed again, not edited; the infrared file is not a picture
+                    res = self.library_edit(key, [f], {"edit": edit})
+                    if res.get("ok", True):
+                        kept.append(f)
+            except (ValueError, OSError) as e:
+                self.say(f"frame {i + 1}: could not keep the change for its saved picture ({e})")
+                continue
+            if kept:
+                what = "crop and turn" if edit and edit.get("crop") and edit.get("turns") else (
+                    "crop" if edit and edit.get("crop") else "turn" if edit else "no crop or turn")
+                self.say(f"frame {i + 1}: {what} kept for {', '.join(kept)} in Scanned pictures; the file is unchanged"
+                         + (" (cut to the part that was saved: Scan again to get more)" if past else ""))
 
     def _crop_box(self, i, shape):
         """Frame i's crop as (row0, row1, col0, col1) on a plane of `shape` turned the way the person sees it."""
@@ -835,6 +934,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         self.frame_rot = {}
         self.frame_focus = {}  # new film (or a new look at it): focus each frame again
         if d.thumbnail is not None:
+            self.turnlearn_strip_guess({i: t[0] for i, t in self._thumb_tiles().items()})   # in upside down? first, for the whole strip (turnlearning.py)
             self.thumb_png = self._png(d.thumbnail)
             self.thumb_v += 1
             self._show_thumbnail_tiles()
@@ -961,15 +1061,25 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         if not isinstance(d, Strip):
             return []
         before = list(d.frames)
-        fit = bool(self.settings.get("frame_fit"))
+        fit = realign = bool(self.settings.get("frame_auto"))   # one switch (Settings): onto their own picture, then onto the gaps
+        realign_new = realign and not d.realign_tried
+        if realign_new:
+            d.realign_tried = True
+            try:
+                d.realigned, d.realign_note = realign_frames(d, d.found)
+            except Exception:  # noqa: BLE001 - an extra: the driver's frames are always there to fall back on
+                traceback.print_exc()
+                d.realigned, d.realign_note = None, ""
         if fit and d.fitted is None:
             try:
-                d.fitted, d.fit_note = fit_frames(d)
+                d.fitted, d.fit_note = fit_frames(d, d.placed(realign))
             except Exception:  # noqa: BLE001 - an extra: the driver's frames are always there to fall back on
                 traceback.print_exc()
                 d.fitted, d.fit_note = None, "could not fit the frames to the gaps"
             d.fitted = d.fitted or None
-        d.windows(fit)
+        d.windows(fit, realign)
+        if realign and not quiet and d.realign_note and (realign_new or not fit):
+            self.say(f"frames: {d.realign_note}")
         if fit and not quiet and d.fit_note:
             self.say(f"frames: {d.fit_note}")
         return [i for i, (a, b) in enumerate(zip(before, d.frames)) if a != b]
@@ -995,10 +1105,23 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         d = self.discovery
         if not isinstance(d, Strip):
             return {"shift": 0, "fitted": False, "moved": 0}
-        return d.state(i, bool(self.settings.get("frame_fit")))
+        return d.state(i, bool(self.settings.get("frame_auto")), bool(self.settings.get("frame_auto")))
 
-    def frame_fit_setting_changed(self):
+    def frame_fit_setting_changed(self, realign_changed=False):
+        if realign_changed and isinstance(self.discovery, Strip):
+            self.discovery.fitted = None          # fitted from the other starting windows: work it out again
         self._frames_moved(self._place_frames(quiet=False))
+
+    def nudge_strip(self, steps=0, reset=False):
+        """Move every frame's window on the strip together by hand: steps presses of 1% of a frame's
+        length (+ = later along the strip), or back to where they were placed."""
+        d = self.discovery
+        if not isinstance(d, Strip) or not d.frames:
+            return {"ok": False}
+        most = int(round(NUDGE_MOST / NUDGE))
+        d.strip_shift = 0 if reset else max(-most, min(most, d.strip_shift + int(steps)))
+        self._frames_moved(self._place_frames())
+        return {"ok": True, "strip_shift": d.strip_shift, "strip_moved": round(d.strip_shift * NUDGE * 100)}
 
     def nudge_frame(self, i, steps=0, reset=False):
         """Move frame i's window along the strip by hand: steps presses of 1% of its length (+ = later
@@ -1014,7 +1137,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
             d.shift.pop(i, None)
         changed = self._place_frames()
         self._frames_moved(changed)
-        st = d.state(i, bool(self.settings.get("frame_fit")))
+        st = self._window_state(i)
         if not reset and steps and i not in changed:
             self.say(f"frame {i + 1} is at the end of the strip: it cannot move further that way")
         return {"ok": True, **st}

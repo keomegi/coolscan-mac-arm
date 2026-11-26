@@ -1,4 +1,5 @@
 import os, sys, tempfile, time
+os.environ.setdefault("COOLSCAN_LEARN_DIR", tempfile.mkdtemp(prefix="coolscan-learn-"))   # learning: never the person's own
 home = tempfile.mkdtemp(); os.environ["HOME"] = home
 sys.path.insert(0, sys.argv[1] if len(sys.argv) > 1 else str(__import__('pathlib').Path(__file__).resolve().parents[2]))
 from pathlib import Path

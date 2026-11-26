@@ -61,12 +61,75 @@ def frame_colour(planes, exposures):
         return None
     if len(planes) != 3 or min(times) <= 0:
         return None
-    lo, hi = [], []
+    lo, hi, q = [], [], []
     for p, e in zip(planes, times):
-        a, b = np.percentile(_inner_sample(p, e), (0.1, 99.9))
+        d = _inner_sample(p, e)
+        a, b = np.percentile(d, (0.1, 99.9))
         lo.append(round(float(a), 4))
         hi.append(round(float(b), 4))
-    return {"lo": lo, "hi": hi}
+        q.append([round(float(v), 3) for v in np.percentile(d, FRAME_QS)])
+    return {"lo": lo, "hi": hi, "q": q}
+
+
+# How much film there is at each density in a frame: its densities at these percentiles, per colour.
+# A roll's frames together say how the film's three colours run against each other (film_curve).
+FRAME_QS = np.arange(0.5, 100, 1.0)
+CURVE_QS = np.concatenate([[0.5, 1, 2, 3.5], np.arange(5, 96, 5), [96.5, 98, 99, 99.5]])
+
+
+def film_curve(frames, lo):
+    """How a film's three colours run against each other, from its lightest to its densest parts.
+
+    A film's colour layers do not all gain density at the same rate (in old film they have drifted
+    apart, most of all in the thin parts), so two numbers per colour cannot line them up everywhere:
+    thin frames come out with a colour cast. Taken together, the frames of a roll have about as much
+    of each colour at every brightness, so the density a tenth, a half, nine tenths... of the way up
+    in red, in green and in blue belong together. For each colour this gives a curve from its density
+    above `lo` (the film base) to one common density, the mean of the three.
+
+    frames: frame_colour results with "q"; fewer than FILM_PROFILE_LEAST of them gives None.
+    Returns {"x": [red, green, blue lists], "y": list}.
+    """
+    good = [f["q"] for f in frames if isinstance(f, dict) and isinstance(f.get("q"), list) and len(f["q"]) == 3
+            and all(isinstance(c, list) and len(c) == len(FRAME_QS) for c in f["q"])]
+    if len(good) < FILM_PROFILE_LEAST:
+        return None
+    try:
+        xs = [np.percentile(np.concatenate([np.asarray(q[c], np.float64) for q in good]) - float(lo[c]), CURVE_QS)
+              for c in range(3)]
+    except (TypeError, ValueError, IndexError):
+        return None
+    step = 1e-4 * np.arange(len(CURVE_QS))
+    xs = [np.maximum.accumulate(x - step) + step for x in xs]   # always rising, never flat
+    y = np.mean(xs, axis=0)
+    if y[-1] - y[0] < 0.05:
+        return None
+    return {"x": [[round(float(v), 4) for v in x] for x in xs], "y": [round(float(v), 4) for v in y]}
+
+
+def _curve_of(profile):
+    """A profile's curve as arrays ([x red, green, blue], y), or None when it has none that can be used."""
+    c = profile.get("curve") if isinstance(profile, dict) else None
+    try:
+        xs = [np.asarray(x, np.float32) for x in c["x"]]
+        y = np.asarray(c["y"], np.float32)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(xs) != 3 or y.ndim != 1 or len(y) < 4 or any(x.shape != y.shape or np.any(np.diff(x) <= 0) for x in xs) \
+            or np.any(np.diff(y) <= 0):
+        return None
+    return xs, y
+
+
+def curve_apply(d, x, y):
+    """A colour's density above the film base -> the common density, going straight on beyond the ends."""
+    d = np.asarray(d, np.float32)
+    out = np.interp(d, x, y).astype(np.float32)
+    n = min(3, len(x) - 1)
+    s0 = (y[n] - y[0]) / (x[n] - x[0])
+    s1 = (y[-1] - y[-1 - n]) / (x[-1] - x[-1 - n])
+    out = np.where(d < x[0], y[0] + (d - x[0]) * s0, out)
+    return np.where(d > x[-1], y[-1] + (d - x[-1]) * s1, out).astype(np.float32)
 
 
 FILM_PROFILE_LEAST = 3  # frames a film profile needs at the very least
@@ -87,7 +150,11 @@ def film_profile_from(frames):
     hi = [float(np.percentile([f["hi"][c] for f in good], 90)) for c in range(3)]
     if min(h - a for a, h in zip(lo, hi)) < 0.05:
         return None
-    return {"lo": [round(v, 4) for v in lo], "hi": [round(v, 4) for v in hi], "frames": len(good)}
+    out = {"lo": [round(v, 4) for v in lo], "hi": [round(v, 4) for v in hi], "frames": len(good)}
+    curve = film_curve(good, lo)
+    if curve:
+        out["curve"] = curve
+    return out
 
 
 def _usable_profile(profile, planes, exposures):
@@ -101,7 +168,7 @@ def _usable_profile(profile, planes, exposures):
         return None
     if len(lo) != 3 or len(hi) != 3 or min(times) <= 0 or min(h - a for a, h in zip(lo, hi)) < 0.05:
         return None
-    return lo, hi, times
+    return lo, hi, times, _curve_of(profile)
 
 
 def invert_negative(planes, tone="nikon", profile=None, exposures=None):
@@ -115,7 +182,8 @@ def invert_negative(planes, tone="nikon", profile=None, exposures=None):
     With a film profile (and the pass's exposures) the three colours are lined up by the
     film's own numbers instead of by this frame's contents, so a frame full of one colour
     keeps it and every frame of the roll gets the same colour. Brightness is then stretched
-    for the frame as a whole, by the same amount for all three colours.
+    for the frame as a whole, by the same amount for all three colours. A profile with a "curve"
+    (film_curve) lines the colours up at every brightness, not only at the two ends.
     """
     use = _usable_profile(profile, planes, exposures)
     if use is None:
@@ -129,7 +197,23 @@ def invert_negative(planes, tone="nikon", profile=None, exposures=None):
             np.clip(v, 0, 1, out=v)
             out.append(_tone(v, tone))
         return out
-    lo, hi, times = use
+    lo, hi, times, curve = use
+    if curve is not None:
+        # the film's own curve per colour: every colour becomes the same common density, at every brightness
+        xs, y = curve
+        ends = [np.percentile(curve_apply(_inner_sample(p, e) - np.float32(a), x, y), (0.1, 99.9))
+                for p, e, a, x in zip(planes, times, lo, xs)]
+        black, white = min(e[0] for e in ends), max(e[1] for e in ends)
+        span = max(float(white - black), 1e-6)
+        out = []
+        for p, e, a, x in zip(planes, times, lo, xs):
+            v = curve_apply(_density(p, e) - np.float32(a), x, y)
+            v -= np.float32(black)
+            v /= np.float32(span / (1 - 2 * HEADROOM))
+            v += HEADROOM
+            np.clip(v, 0, 1, out=v)
+            out.append(_tone(v, tone))
+        return out
     ends = []
     for p, e, a, b in zip(planes, times, lo, hi):
         s = (_inner_sample(p, e) - a) / (b - a)

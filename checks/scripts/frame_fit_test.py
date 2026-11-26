@@ -4,7 +4,7 @@ import sys, tempfile, pathlib, types
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import numpy as np
 import cs_next as cs
-from coolscan_app.scanner.strip import Strip, fit_frames
+from coolscan_app.scanner.strip import Strip, fit_frames, realign_frames
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 cs.SETTINGS_FILE = tmp / "settings.json"
@@ -124,12 +124,80 @@ app.session.scan_frame = lambda frame, *a, **kw: (calls.append(tuple(frame)), re
 app.preview([1])
 check("a pass over the frame reads the moved window", calls and calls[-1] == tuple(d.frames[1]), str(calls[-1:]))
 app.nudge_frame(1, 1000)
-check("the presses are capped at 25%", d.shift[1] == 25, str(d.shift))
+check("the presses are capped at 50% (half a picture)", d.shift[1] == 50, str(d.shift))
 app.nudge_frame(1, reset=True)
 check("reset puts it back", d.frames[1] == before and 1 not in d.shift)
-app.settings["frame_fit"] = True
-app.frame_fit_setting_changed()
+app.settings["frame_auto"] = True
+app.frame_fit_setting_changed(realign_changed=True)
 check("fit on without gaps in the thumbnail leaves the frames where the driver put them", d.frames == d.found, d.fit_note)
+
+check("automatic placing is off unless switched on in Settings", cs.App(demo=True).settings.get("frame_auto") is False
+      and cs.App(demo=True).settings.get("show_frame_offset") is False)
+print("C2 whole-strip nudge")
+app.settings["frame_auto"] = False
+app.frame_fit_setting_changed(realign_changed=True)
+start = list(d.frames)
+r = app.nudge_strip(3)
+check("3 presses move every frame 3% later", r.get("strip_shift") == 3 and all(
+    b[0] - a[0] == round(0.03 * (a[2] - a[0])) for a, b in zip(start[:-1], d.frames[:-1])), str(r))
+check("the page is told for each frame", app.state()["tiles"][0]["window"]["strip_moved"] == 3)
+app.nudge_frame(2, 2)
+check("a frame's own nudge adds to the strip's", d.frames[2][0] - start[2][0] == round(0.05 * (start[2][2] - start[2][0])))
+app.nudge_strip(-1000)
+check("the strip's presses are capped at 50%", d.strip_shift == -50, str(d.strip_shift))
+app.nudge_strip(reset=True); app.nudge_frame(2, reset=True)
+check("reset strip puts every frame back", d.frames == start)
+
+print("E frames the driver put across a gap (strip cut through its first picture)")
+def cut_strip(cut=0.8, wrong=(0, 1), gap=60000, gapw=6, pw=136, n=6, slide=False, shift=None):
+    """A strip whose first picture was cut (only `cut` of it left), frames placed from the strip's
+    start like nkscan's: the frames in `wrong` run on into the next picture, the rest sit right."""
+    rows = 96
+    def g():
+        return np.full((rows, gapw, 3), gap, np.float32) * (1 + rng.normal(0, 0.01, (rows, gapw, 1)))
+    first = int(pw * cut)
+    parts, spans, x = [picture(rows, first, slide), g()], [(0, first)], first + gapw
+    for _ in range(n - 1):
+        parts.append(picture(rows, pw, slide)); spans.append((x, x + pw)); x += pw
+        parts.append(g()); x += gapw
+    S = np.concatenate(parts, 1)
+    pitch = pw + gapw
+    off = shift if shift is not None else pw - first
+    frames = []
+    for k, (s0, s1) in enumerate(spans):
+        if k in wrong:
+            a = k * pitch
+            frames.append((a * 100 + 30, 0, (a + pitch) * 100 + 30, 900))
+        else:
+            frames.append((s0 * 100, 0, (s0 + pitch) * 100, 900))
+    d = types.SimpleNamespace(thumbnail={k: S[..., j] for j, k in enumerate(("red", "green", "blue"))},
+                              column_addresses=[c * 100 for c in range(S.shape[1])], row_addresses=[], frames=frames)
+    return d, spans
+for label, kw in [("negatives, first picture 80% left", {}),
+                  ("negatives, first picture 60% left, three frames off", dict(cut=0.6, wrong=(0, 1, 2))),
+                  ("slides (black gaps)", dict(gap=300, slide=True))]:
+    d, spans = cut_strip(**kw)
+    new, note = realign_frames(d)
+    wrong = kw.get("wrong", (0, 1))
+    ok = new is not None and all(abs(new[k][2] / 100 - spans[k][1]) <= 1 and (k == 0 or abs(new[k][0] / 100 - spans[k][0]) <= 1)
+                                 for k in wrong)
+    check(f"{label}: the frames across a gap end up on their own picture", ok,
+          note + "  " + str([(round(f[0] / 100), round(f[2] / 100)) for f in (new or [])][:4]) + " want " + str(spans[:4]))
+    check(f"{label}: the frames that were right stay", new is not None and all(new[k] == tuple(d.frames[k]) for k in range(6) if k not in wrong))
+d, spans = cut_strip(cut=1.0, wrong=())
+check("a strip whose frames all sit right: nothing moves", realign_frames(d)[0] is None)
+d, spans = cut_strip(gapw=0)
+check("pictures touching (no gaps to see): nothing moves", realign_frames(d)[0] is None)
+d, spans = cut_strip(n=2)
+check("only two frames (too few gaps to know the spacing): nothing moves", realign_frames(d)[0] is None)
+d, spans = cut_strip()
+s = Strip(d)
+s.realigned, _ = realign_frames(d)
+check("Strip uses the moved frames, or the driver's when switched off",
+      s.windows(False) == s.realigned and s.windows(False, realign=False) == s.found)
+check("its state says so", s.state(0, False)["realigned"] and not s.state(3, False)["realigned"])
+fitted, _ = fit_frames(d, s.realigned)
+check("fit to the gaps starts from the moved frames", abs(fitted[1][0] / 100 - spans[1][0]) <= 1, str(fitted[:2]))
 
 print("D Auto crop: Extra trim and Sides")
 app.settings.update(auto_crop_trim=0.02, auto_crop_sides="all")

@@ -34,7 +34,9 @@ PAGES = {
     "page_profiles.js": ((), {}, None),
     "page_crop_scan.js": ((), {}, None),
     "page_crop_handles.js": ((), {}, None),
+    "page_queue_buttons.js": ((), {}, None),
     "page_roll_optional.js": ((), {}, None),
+    "page_export.js": ((), {}, None),
     "page_auto_crop.js": ((), {"COOLSCAN_DEMO_BORDERS": "1"}, None),
     # already failing before the folders were moved (waits for 4 results that do not come); left to fix in test mode
     "page_test_mode.js": (("--test",), {}, [needs_testmode, pytest.mark.xfail(reason="failed before the move too", strict=False)]),
@@ -48,6 +50,23 @@ def _params():
             if (PAGE / n).exists() or m is not None]
 
 
+# the pretend scanner as each other model (and holder): controls, the long-strip row, a scan
+MODELS = ["LS-50", "LS-50:SF-210", "LS-5000", "LS-5000:SA-30", "LS-4000", "LS-40:MA-20", "LS-8000", "LS-9000"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_model_page(model, app_copy, home, tmp_path):
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    with running_app(app_copy, home, env_extra={"COOLSCAN_DEMO_MODEL": model}) as (base, _):
+        port = base.rsplit(":", 1)[1]
+        r = subprocess.run(["node", str(PAGE / "page_models.js"), port, str(shots), model], cwd=PAGE,
+                           capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(r.stdout[r.stdout.index("{"):])
+    assert report["problems"] == [], report
+
+
 @pytest.mark.parametrize("name", _params())
 def test_page(name, app_copy, home, tmp_path):
     args, env, _ = PAGES[name]
@@ -55,7 +74,7 @@ def test_page(name, app_copy, home, tmp_path):
     shots.mkdir()
     with running_app(app_copy, home, *args, env_extra=env) as (base, _):
         port = base.rsplit(":", 1)[1]
-        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name == "page_test.js"
+        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name in ("page_test.js", "page_export.js")
                 else [port, str(shots)])
         r = subprocess.run(["node", str(PAGE / name), *argv], cwd=PAGE, capture_output=True, text=True, timeout=600)
     out = r.stdout + r.stderr

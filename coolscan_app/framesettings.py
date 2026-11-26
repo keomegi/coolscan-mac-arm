@@ -1,10 +1,14 @@
 """Settings for one frame: a frame can be scanned with some settings of its own (another resolution,
 more grain reduction, ...). The rest comes from the settings everyone uses. They belong to the strip
 on screen: another strip, and they are gone."""
+import json
 
 # what a frame may set for itself: how it is scanned and developed, not where it goes or what it is called
 FRAME_KEYS = ("dpi", "samples", "multi_exposure", "clean", "dust_method", "grain", "restore",
               "focus_mode", "exposure_mode", "white_balance", "negatives", "tone", "colour_space")
+
+# what makes a second scan of a frame come out the same as the first: these settings, its crop and its place on the strip
+SAME_KEYS = FRAME_KEYS + ("film", "format", "archive", "crop_scan", "film_profile", "focus_point", "focus_position")
 
 
 def _words(over):
@@ -83,6 +87,33 @@ class FrameSettingsMixin:
         with self.lock:
             self.version += 1
         return {"ok": True}
+
+    def scan_signature(self, i):
+        """Everything frame i would be scanned with right now, as one text. Kept with the picture when it
+        is saved, so that a second scan that would only repeat the first can be asked about."""
+        st = {**self.shared_settings(), **(self._frame_over().get(i) or {})}
+        try:
+            folder = str(self.roll_dir())
+        except Exception:  # noqa: BLE001 - a folder that cannot be read is no reason to refuse a scan
+            folder = ""
+        try:
+            shift = self._window_state(i).get("shift")
+        except Exception:  # noqa: BLE001
+            shift = None
+        return json.dumps({"s": {k: st.get(k) for k in SAME_KEYS}, "crop": self.crops.get(i), "shift": shift,
+                           "folder": folder}, sort_keys=True, default=str)
+
+    def scanned_same(self, frames=None):
+        """Of these frames (none given = the whole strip), the ones whose last saved scan on this strip
+        was made with exactly what they would be scanned with now."""
+        n = len(self.discovery.frames) if self.discovery is not None else 0
+        frames = [int(i) for i in frames or range(n) if 0 <= int(i) < n]
+        out = []
+        for i in frames:
+            last = (self.frame_saved.get(i) or [None])[-1]
+            if last and last.get("sig") and last["sig"] == self.scan_signature(i):
+                out.append(i)
+        return out
 
     def _scan_one_as_set(self, s, d, i, n, stem, job, saved):
         """Scan frame i with its own settings, if it has any, laid over the shared ones for this frame only."""

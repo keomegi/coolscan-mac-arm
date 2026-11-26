@@ -1,5 +1,6 @@
 """Keeping the Mac awake during jobs, and noticing a sleep (no Mac needed: a pretend caffeinate)."""
 import os, sys, tempfile, time, threading
+os.environ.setdefault("COOLSCAN_LEARN_DIR", tempfile.mkdtemp(prefix="coolscan-learn-"))   # learning: never the person's own
 import xml.sax.saxutils  # noqa: F401 - loaded now: imported later with sys.platform faked to "darwin", it looks for _scproxy
 from pathlib import Path
 

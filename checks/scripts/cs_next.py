@@ -1,8 +1,14 @@
 """Stand-in for the old single file, for the checks: every name is looked up in (and set on) the
 package's modules, so `cs.SETTINGS_FILE = ...` and `cs._Demo._wait = ...` still reach the right place."""
+import os
 import sys
+import tempfile
 import types
 from pathlib import Path
+
+# learning (auto crop, auto rotate) in a throwaway folder: the checks never use or change the person's own
+# learned models (the app's models/) or samples (~/.coolscan-crops), whatever HOME is
+os.environ.setdefault("COOLSCAN_LEARN_DIR", tempfile.mkdtemp(prefix="coolscan-learn-"))
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))

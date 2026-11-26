@@ -59,8 +59,10 @@ def post(path, body):
     req = urllib.request.Request(url + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(req).read())
 r = post("/api/scan", {"frames": [0]})
+check("frame 1 was scanned with these settings already: asked about that first", r.get("confirm_again") == [0] and app.job is None, str(r))
+r = post("/api/scan", {"frames": [0], "again_ok": True})
 check("scan answers with the names, no job started", r.get("confirm_overwrite") == [f"{D}_001"] and not r.get("ok") and app.job is None, str(r))
-r = post("/api/scan", {"frames": [0], "overwrite_ok": True})
+r = post("/api/scan", {"frames": [0], "again_ok": True, "overwrite_ok": True})
 for _ in range(200):
     if app.job is None: break
     time.sleep(0.05)

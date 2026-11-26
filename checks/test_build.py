@@ -44,7 +44,7 @@ def test_package_layout():
     for sub in ("scanner", "imaging", "extras", "web"):
         assert (PACKAGE / sub).is_dir(), sub
     top = {p.stem for p in PACKAGE.glob("*.py")}
-    assert top == {"__init__", "app", "server", "settings", "rolls", "keepawake", "library", "framesettings", "applog", "croplearning"}, top
+    assert top == {"__init__", "app", "server", "settings", "rolls", "keepawake", "library", "exporting", "framesettings", "applog", "croplearning", "turnlearning"}, top
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

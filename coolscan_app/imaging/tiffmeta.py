@@ -65,7 +65,7 @@ def _head(f):
     return order, struct.unpack(order + "I", head[4:8])[0]
 
 
-def make_xmp(caption="", tags=(), rating=0, taken=None, people=(), date_note=""):
+def make_xmp(caption="", tags=(), rating=0, taken=None, people=(), date_note="", creator="", rights=""):
     """An XMP packet with what Lightroom shows as Caption, Keywords, Rating and Capture Time."""
     parts = []
     if rating:
@@ -86,6 +86,10 @@ def make_xmp(caption="", tags=(), rating=0, taken=None, people=(), date_note="")
                      + "</rdf:Bag></Iptc4xmpExt:PersonInImage>")
     if date_note:
         parts.append(f"<coolscan:DateNote>{escape(date_note)}</coolscan:DateNote>")
+    if creator:
+        parts.append(f"<dc:creator><rdf:Seq><rdf:li>{escape(creator)}</rdf:li></rdf:Seq></dc:creator>")
+    if rights:
+        parts.append('<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">' + escape(rights) + "</rdf:li></rdf:Alt></dc:rights>")
     body = "\n   ".join(parts)
     return ('<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
             '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
@@ -98,7 +102,7 @@ def make_xmp(caption="", tags=(), rating=0, taken=None, people=(), date_note="")
             '  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>')
 
 
-def update_tiff(path, caption="", tags=(), rating=0, taken=None, force=False, people=(), date_note=""):
+def update_tiff(path, caption="", tags=(), rating=0, taken=None, force=False, people=(), date_note="", creator="", rights=""):
     """Write caption, keywords, stars and (if given) the date taken into a TIFF. Pixels are not touched.
 
     A file whose XMP was written by another program is refused (NotOurs) unless force: that XMP may
@@ -135,9 +139,13 @@ def update_tiff(path, caption="", tags=(), rating=0, taken=None, force=False, pe
             blob = text.encode("ascii", "replace") + b"\0"
             return entry(tag, 2, len(blob), blob)
 
-        xmp = make_xmp(caption, tags, rating, taken, people, date_note).encode("utf-8")
+        xmp = make_xmp(caption, tags, rating, taken, people, date_note, creator, rights).encode("utf-8")
         keep = {e[0]: e for e in entries if e[0] not in (XMP_TAG,)}
         keep[XMP_TAG] = entry(XMP_TAG, 1, len(xmp), xmp)
+        if creator:
+            keep[315] = ascii_entry(315, creator)        # Artist
+        if rights:
+            keep[33432] = ascii_entry(33432, rights)     # Copyright
         if taken:
             stamp = taken.strftime("%Y:%m:%d %H:%M:%S")
             keep[306] = ascii_entry(306, stamp)

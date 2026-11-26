@@ -7,9 +7,7 @@ strip, scanned or worked out again with several sets of settings, each result sa
 side. It is a separate way of starting the app and does not appear on the ordinary screen:
 
 ```
-cd ~/Documents/GitHub/nikon_scan_project
-source .venv/bin/activate
-python coolscan.py --test
+python3 coolscan.py --test
 ```
 
 Test mode is optional and kept out of git, like `notify.py`: `coolscan_app/extras/testmode.py`,
@@ -48,7 +46,7 @@ What to know:
   two passes of the same frame differ. The frame is focused once and every pass of the test
   uses that lens position.
 - **Where the results go**: a new folder for every test in `Tests/` inside the app's own folder
-  (`~/Documents/GitHub/nikon_scan_project/Tests/`), not in your scans folder. `.gitignore` keeps
+  (`Tests/` in the Coolscan folder), not in your scans folder. `.gitignore` keeps
   `Tests/` out of git, so test pictures are never committed. For example
   `Tests/20261123-101500 frame 3/`, holding `01 Settings in use.tif`, `02 dust removal off.tif`
   and so on (in `RAW/` and `Positive/` if a run is in Archive mode), plus `Test log.txt` with

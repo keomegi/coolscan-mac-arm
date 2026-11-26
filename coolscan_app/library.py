@@ -33,8 +33,9 @@ from pathlib import Path
 
 import numpy as np
 
+from .imaging import filmfix
 from .imaging.autocrop import find_picture
-from .imaging.colour import COLOUR_SPACES, shrink, to_srgb8
+from .imaging.colour import COLOUR_SPACES, film_profile_from, frame_colour, shrink, to_srgb8
 from .imaging.files import encode_png, read_tiff16, read_tiff_info, write_tiff
 from .imaging.tiffmeta import NotOurs, update_tiff
 from .rolls import COLOUR_FILE, DESCRIPTION_FILE
@@ -186,11 +187,18 @@ def _stretch8(planes, negative=False):
     return np.dstack(out) if len(out) > 1 else out[0]
 
 
-def picture_png(path, side, edit=None, crop=True):
+def picture_png(path, side, edit=None, crop=True, fix=None, as_scanned=False):
     """A picture file as a PNG for the page, colours right for the screen. A file as scanned (a RAW or
     negative file, which carries the app's scan note) is stretched to be seen, like on the Re-develop page.
-    edit: the crop and turn kept in the Library (shown, never written into the file)."""
+    edit: the crop and turn kept in the Library (shown, never written into the file).
+    fix: the roll's film colour put onto the picture (filmfix), also never written into the file.
+    as_scanned: a RAW file the way the scanner read it, all colours stretched alike (a negative stays
+    orange), for picking the film base."""
     planes, _ = read_small(path, side)
+    if fix:
+        planes = filmfix.recolour(planes, fix["m"].get("space"), fix["m"], fix["numbers"])
+    if as_scanned:
+        return encode_png(np.ascontiguousarray(_stretch8(planes[:3], False)))
     planes = apply_edit(planes, edit, crop)
     try:
         info = read_tiff_info(path)
@@ -301,8 +309,22 @@ class LibraryMixin:
         pos = folder / "Positive"
         return pos if pos.is_dir() and _tifs(pos) else folder
 
+    @staticmethod
+    def _lib_pictures(folder):
+        """A folder's finished pictures as (file, name), in name order: those in Positive/ (Archive mode)
+        and those in the folder itself. A roll scanned partly with Archive mode and partly without has
+        both; a picture that is in both places is listed once, from Positive/."""
+        pos = folder / "Positive"
+        out = {n: "Positive/" + n for n in _tifs(pos)} if pos.is_dir() else {}
+        stems = {n.rsplit(".", 1)[0] for n in out}
+        for n in _tifs(folder):
+            if n.rsplit(".", 1)[0] not in stems:
+                out[n] = n
+        return [(out[n], n) for n in sorted(out)]
+
     def _lib_summary(self, folder, key, name):
-        pics = _tifs(self._lib_pictures_dir(folder))
+        both = self._lib_pictures(folder)
+        pics = [n for _, n in both]
         raw = folder / "RAW"
         stems = {n.rsplit(".", 1)[0] for n in pics} | ({n.rsplit(".", 1)[0] for n in _tifs(raw)} if raw.is_dir() else set())
         desc = ""
@@ -311,13 +333,14 @@ class LibraryMixin:
         except OSError:
             pass
         times = []
-        for p in (pics[:1] + pics[-1:]):
+        for rel, _ in (both[:1] + both[-1:]):
             try:
-                times.append((self._lib_pictures_dir(folder) / p).stat().st_mtime)
+                times.append((folder / rel).stat().st_mtime)
             except OSError:
                 pass
-        redo = sum(1 for m in self._lib_marks(folder)["pictures"].values() if m.get("redo"))
-        return {"key": key, "name": name, "count": len(stems), "raw": raw.is_dir() and bool(_tifs(raw)), "redo": redo,
+        allm = self._lib_marks(folder)["pictures"].values()
+        rescan = sum(1 for m in allm if m.get("rescan"))
+        return {"key": key, "name": name, "count": len(stems), "raw": raw.is_dir() and bool(_tifs(raw)), "rescan": rescan,
                 "description": desc.split("\n", 1)[0][:160],
                 "first": time.strftime("%Y-%m-%d", time.localtime(min(times))) if times else None,
                 "last": time.strftime("%Y-%m-%d", time.localtime(max(times))) if times else None,
@@ -351,20 +374,19 @@ class LibraryMixin:
     def library_roll(self, key):
         """One folder: its description, its pictures and what else is in it."""
         folder = self._lib_folder(key)
-        pics_dir = self._lib_pictures_dir(folder)
-        sub = "" if pics_dir == folder else pics_dir.name + "/"
         raw_dir = folder / "RAW"
         raws = set(_tifs(raw_dir)) if raw_dir.is_dir() else set()
         versions = self._lib_versions(folder)
         pictures = []
-        for name in _tifs(pics_dir)[:PICTURES_MOST]:
+        for rel, name in self._lib_pictures(folder)[:PICTURES_MOST]:
             stem = name.rsplit(".", 1)[0]
+            pics_dir = (folder / rel).parent
             try:
-                st = (pics_dir / name).stat()
+                st = (folder / rel).stat()
             except OSError:
                 continue
             raw = name if name in raws else next((r for r in raws if r.rsplit(".", 1)[0] == stem), None)
-            pictures.append({"file": sub + name, "name": name, "bytes": st.st_size, "v": int(st.st_mtime),
+            pictures.append({"file": rel, "name": name, "bytes": st.st_size, "v": int(st.st_mtime),
                              "raw": ("RAW/" + raw) if raw else None,
                              "ir": (pics_dir / f"{stem}_IR.tif").is_file() or (raw_dir / f"{stem}_IR.tif").is_file(),
                              "versions": versions.get(stem, [])})
@@ -379,9 +401,21 @@ class LibraryMixin:
                                      "raw": "RAW/" + raw, "ir": True, "versions": versions.get(stem, []), "only_raw": True})
             pictures.sort(key=lambda p: p["name"])
         marks = self._lib_marks(folder)
+        colour = self._lib_colour_state(folder)
+        fc = colour["stamp"] if colour["numbers"] else ""
+        own_frames = {}
+        try:
+            own_frames = {k: bool(v.get("own")) for k, v in json.loads((folder / COLOUR_FILE).read_text(encoding="utf-8"))["frames"].items() if isinstance(v, dict)}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
         for p in pictures:
             p.update(self._lib_marks_of(marks, p["file"]))
-            p["taken"] = self._lib_taken(folder / p["file"])
+            if p["raw"] and not p.get("only_raw"):
+                own = p.get("colour") == "own" or (p.get("colour") is None and own_frames.get(p["name"].rsplit(".", 1)[0]))
+                p["own_colour"] = bool(own)
+                if fc or own:
+                    p["fc"] = (fc or "") + ("o" if own else "")
+            p["taken"] = self._lib_taken_of(folder, p["file"], marks["pictures"].get(p["file"]))
         text = ""
         try:
             text = (folder / DESCRIPTION_FILE).read_text(encoding="utf-8", errors="replace").strip()
@@ -391,7 +425,7 @@ class LibraryMixin:
         if self.settings["use_roll"] and key and key == self.settings["roll"]:
             text = self.settings["film_description"] or text  # the scanning screen's copy is the newest
         return {"ok": True, "key": key, "name": name, "path": self._short_path(folder), "description": text,
-                "pictures": pictures, "scan_log": (folder / "ScanLog.txt").is_file(),
+                "pictures": pictures, "scan_log": (folder / "ScanLog.txt").is_file(), "film_colour": colour,
                 "current": bool(self.settings["use_roll"]) and key == self.settings["roll"]}
 
     @staticmethod
@@ -454,6 +488,11 @@ class LibraryMixin:
                                              "scanned", "roll", "from_roll_file") if k in note}
         out["raw"] = raw_rel
         out["edit"] = self._lib_edit_of(folder, rel)
+        fix, why = self._lib_fix(folder, path, rel)
+        mode = (filmfix.read_roll(folder) or {}).get("mode", "frame")
+        out["film_colour"] = {"mode": mode, "words": filmfix.MODE_WORDS[mode], "applied": bool(fix), "why": why,
+                              "own": self._lib_own_colour(folder, path, rel),
+                              "tone": fix["m"]["tone"] if fix else None}
         out["versions"] = self._lib_versions(folder).get(stem, [])
         return out
 
@@ -466,17 +505,26 @@ class LibraryMixin:
         """A picture for the page: small (cached on disk) or the one on show (kept for the last few).
         view: "edited" (with the Library's crop and turn), "turned" (turned, not cut: for cropping) or "original"."""
         folder, path = self._lib_file(key, rel)
+        if view == "negative":   # the picture's RAW file as scanned, to pick the film base on
+            raw = self._lib_raw_of(folder, path, rel)
+            if raw is None:
+                raise ValueError("no RAW file")
+            return picture_png(raw, BIG_SIDE, as_scanned=True)
         st = path.stat()
         e = None if view == "original" else self._lib_edit_of(folder, rel)
         crop = view != "turned"
-        tag = (str(path), int(st.st_mtime), st.st_size) + ((repr(e), crop) if e else ())
+        fix = None
+        if view != "original" and (filmfix.read_roll(folder) is not None or self._lib_own_colour(folder, path, rel)):
+            fix = self._lib_fix(folder, path, rel)[0]
+        tag = (str(path), int(st.st_mtime), st.st_size) + ((repr(e), crop) if e else ()) + \
+            (("film", hashlib.sha1(repr(fix["numbers"]).encode()).hexdigest(), fix["m"]["tone"]) if fix else ())
         if big:
             with self.lib_lock:
                 png = self.lib_big.get(tag)
                 if png is not None:
                     self.lib_big.move_to_end(tag)
                     return png
-            png = picture_png(path, BIG_SIDE, e, crop)
+            png = picture_png(path, BIG_SIDE, e, crop, fix)
             with self.lib_lock:
                 self.lib_big[tag] = png
                 while len(self.lib_big) > 6:
@@ -488,7 +536,7 @@ class LibraryMixin:
             return (cache / name).read_bytes()
         except OSError:
             pass
-        png = picture_png(path, SMALL_SIDE, e, crop)
+        png = picture_png(path, SMALL_SIDE, e, crop, fix)
         try:
             cache.mkdir(parents=True, exist_ok=True)
             tmp = cache / (name + ".part")
@@ -528,6 +576,9 @@ class LibraryMixin:
         while target.exists():
             target, n = out_dir / f"{Path(name).stem} ({n}).tif", n + 1
         meta = {k: info[k] for k in ("taken", "description", "make", "model", "iso") if info.get(k)}
+        t = self._lib_taken_of(folder, rel)
+        if t:
+            meta["taken"] = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
         icc = info.get("icc")
         meta["colorspace"] = 1 if icc and b"sRGB" in icc[:600] else 65535
         if info.get("coolscan"):
@@ -537,7 +588,7 @@ class LibraryMixin:
         with self.lib_lock:
             marks = self._lib_marks(folder)
             if rel in marks.get("pictures", {}):   # the copy has the crop and turn in its pixels already
-                m = {k: v for k, v in marks["pictures"][rel].items() if k not in ("edit", "redo")}
+                m = {k: v for k, v in marks["pictures"][rel].items() if k not in ("edit", "redo", "rescan", "colour")}
                 marks["pictures"][saved] = m
                 self._lib_save_marks(folder, marks)   # (an entry with nothing left in it is not kept)
                 self._lib_write_file(folder, saved, m)
@@ -565,18 +616,24 @@ class LibraryMixin:
                 return {"ok": False, "error": "The crop is too small."}
         res = self._lib_set_edit(key, rel, {"turns": e["turns"], "crop": rect})
         if rect is not None and res.get("ok") and hasattr(self, "croplearn_library_crop"):
-            self.croplearn_library_crop()   # learned from (the learning auto crop, croplearning.py)
+            self.croplearn_library_crop(self._lib_file(key, rel)[1], res.get("edit"))   # learned from (croplearning.py)
+        if rect is not None and res.get("ok") and hasattr(self, "turnlearn_library_crop"):
+            self.turnlearn_library_crop(self._lib_file(key, rel)[1], res.get("edit"))   # its turn too (turnlearning.py)
         return res
 
-    def library_turn(self, key, rel, quarter):
-        """Turn a picture a quarter (1 = to the left, 3 = to the right, 2 = upside down), kept as a setting."""
+    def library_turn(self, key, rel, quarter, by_hand=True):
+        """Turn a picture a quarter (1 = to the left, 3 = to the right, 2 = upside down), kept as a setting.
+        by_hand: learned from by auto rotate (turnlearning.py); auto rotate's own turns are not."""
         folder, _ = self._lib_file(key, rel)
         k = int(quarter or 0) % 4
         if not k:
             return {"ok": False, "error": "Nothing to turn."}
         e = self._lib_edit_of(folder, rel) or {"turns": 0, "crop": None}
         crop = _turn_rect(e["crop"], k) if e["crop"] else None
-        return self._lib_set_edit(key, rel, {"turns": (e["turns"] + k) % 4, "crop": crop})
+        res = self._lib_set_edit(key, rel, {"turns": (e["turns"] + k) % 4, "crop": crop})
+        if by_hand and res.get("ok") and hasattr(self, "turnlearn_library_turn"):
+            self.turnlearn_library_turn(self._lib_file(key, rel)[1], res.get("edit") or {"turns": 0})
+        return res
 
     def library_autocrop(self, key, files, save=False):
         """Auto crop: find the picture inside each file (film edges, holder, gap between frames left out),
@@ -604,6 +661,8 @@ class LibraryMixin:
                 continue
             rect = [round(float(v), 4) for v in rect] if rect is not None else None
             out.append({"file": rel, "found": rect is not None, "rect": rect, "learned": bool(rect is not None and learned)})
+            if rect is not None and hasattr(self, "croplearn_note_auto"):
+                self.croplearn_note_auto(path, rect)   # an auto crop kept as it is teaches nothing: not learned from
             if rect is not None:
                 found += 1
                 if save:
@@ -613,11 +672,18 @@ class LibraryMixin:
         return {"ok": True, "found": found, "pictures": out, **({"rect": out[0].get("rect"), "found_one": out[0]["found"], "learned": out[0].get("learned", False)} if len(out) == 1 else {})}
 
     def _lib_edited_planes(self, folder, path, rel):
-        """The full picture with its crop and turn, and the file's tags; None when it has no edit."""
+        """The full picture with its crop and turn (and the roll's film colour), and the file's tags;
+        None when nothing is changed."""
         e = self._lib_edit_of(folder, rel)
-        if not e:
+        fix = self._lib_fix(folder, path, rel)[0] if (filmfix.read_roll(folder) is not None or self._lib_own_colour(folder, path, rel)) else None
+        if not e and not fix:
             return None, None, None
-        return apply_edit(read_tiff16(path), e), read_tiff_info(path), e
+        planes = read_tiff16(path)
+        if fix:
+            got = filmfix.recolour([p.astype(np.float32) / 65535 for p in planes[:3]], fix["m"].get("space"), fix["m"], fix["numbers"])
+            planes = [(np.clip(v, 0, 1) * 65535 + 0.5).astype(np.uint16) for v in got]
+        e = dict(e or {"turns": 0, "crop": None}, film=bool(fix))
+        return apply_edit(planes, e), read_tiff_info(path), e
 
     def library_export(self, key, files):
         """New TIFF copies with the crop and turn put into the pixels, in <folder>/Edited/. The pictures
@@ -630,11 +696,74 @@ class LibraryMixin:
             if planes is None:
                 same.append(rel)
                 continue
-            how = ", ".join(w for w in ((f"turn {e['turns']}" if e["turns"] else ""), ("crop" if e["crop"] else "")) if w)
+            how = ", ".join(w for w in ((f"turn {e['turns']}" if e["turns"] else ""), ("crop" if e["crop"] else ""),
+                                        ("roll's film colour" if e.get("film") else "")) if w)
             saved.append(self._lib_copy(folder, path, rel, planes, info, how))
         if saved:
-            self.say(f"library: exported {len(saved)} picture(s) with their crop and turn into {CROPPED_FOLDER}/")
+            self.say(f"library: exported {len(saved)} picture(s) with their crop, turn and film colour into {CROPPED_FOLDER}/")
         return {"ok": True, "saved": saved, "unchanged": same, "folder": CROPPED_FOLDER}
+
+    def library_export_to(self, key, files, dest):
+        """Copies of pictures in a folder of the user's choosing, with their crop and turn put in. The roll
+        folders are kept (Roll 005/...); a picture in a roll's Positive folder goes straight into the roll's
+        folder there. Exported into the scans folder itself, names get _modified. Nothing is overwritten."""
+        dest = Path(os.path.expanduser(str(dest or "").strip()))
+        if not str(dest).strip() or not dest.is_absolute():
+            return {"ok": False, "error": "Choose the folder to export to first."}
+        if not dest.is_dir():
+            return {"ok": False, "error": f"There is no folder {self._short_path(dest)}."}
+        files = [str(f) for f in files or []][:PICTURES_MOST]
+        base = self._lib_base()
+        same_root = dest.resolve() == base.resolve()
+        saved, problems = [], []
+        for rel in files:
+            folder, path = self._lib_file(key, rel)
+            parts = rel.split("/")
+            if len(parts) > 1 and parts[0] == "Positive":
+                parts = parts[1:]          # the finished pictures sit in the roll's own folder in the export
+            out_dir = dest.joinpath(*([p for p in str(key or "").split("/") if p] + parts[:-1]))
+            stem, suffix = Path(parts[-1]).stem, ".tif"
+            if same_root or out_dir.resolve() == path.parent.resolve():
+                stem += "_modified"        # beside the scans themselves: never the same name
+            target, n = out_dir / f"{stem}{suffix}", 2
+            while target.exists() or target.resolve() == path.resolve():
+                target, n = out_dir / f"{stem} ({n}){suffix}", n + 1
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                planes, info, e = self._lib_edited_planes(folder, path, rel)
+                t = self._lib_taken_of(folder, rel)
+                when = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S") if t else None
+                if planes is None:
+                    shutil.copy2(path, target)  # nothing changed: the file as it is, tags and all
+                    if when and t != self._lib_taken(path):   # the date is in the app's list only: the copy gets it
+                        m = self._lib_marks(folder)["pictures"].get(rel) or {}
+                        try:   # a file with another program's metadata keeps it, and its own date
+                            update_tiff(target, caption=m.get("caption") or "", tags=m.get("tags") or [],
+                                        rating=-1 if m.get("flag") == "reject" else int(m.get("stars") or 0), taken=when,
+                                        people=m.get("people") or [], date_note=m.get("date_note") or "")
+                        except (NotOurs, OSError, ValueError, struct.error):
+                            pass
+                else:
+                    meta = {k: info[k] for k in ("taken", "description", "make", "model", "iso") if info.get(k)}
+                    if when:
+                        meta["taken"] = when
+                    icc = info.get("icc")
+                    meta["colorspace"] = 1 if icc and b"sRGB" in icc[:600] else 65535
+                    if info.get("coolscan"):
+                        meta["coolscan"] = {**info["coolscan"], "edited_from": rel}
+                    write_tiff(target, planes, info.get("dpi") or 2900, icc, meta=meta)
+                    m = self._lib_marks(folder)["pictures"].get(rel) or {}
+                    if WRITE_FILES and m:
+                        rating = -1 if m.get("flag") == "reject" else int(m.get("stars") or 0)
+                        update_tiff(target, caption=m.get("caption") or "", tags=m.get("tags") or [], rating=rating,
+                                    taken=datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S") if t else None,
+                                    people=m.get("people") or [], date_note=m.get("date_note") or "")
+                saved.append(str(target.relative_to(dest)))
+            except (OSError, ValueError, struct.error) as ex:
+                problems.append(f"{rel}: {getattr(ex, 'strerror', None) or ex}")
+        self.say(f"library: exported {len(saved)} picture(s) to {self._short_path(dest)}"
+                 + (f"; {len(problems)} could not be" if problems else ""))
+        return {"ok": True, "saved": saved, "problems": problems, "folder": self._short_path(dest), "modified": same_root}
 
     # ------------------------------------------------------------------ stars, flags, tags, captions, dates
     def _lib_marks(self, folder):
@@ -650,7 +779,9 @@ class LibraryMixin:
     @staticmethod
     def _lib_save_marks(folder, marks):
         path = folder / META_FILE
-        marks["pictures"] = {k: v for k, v in marks["pictures"].items() if any(v.get(x) for x in ("stars", "flag", "tags", "caption", "taken", "people", "date_note", "redo", "edit"))}
+        for v in marks["pictures"].values():
+            v.pop("redo", None)   # the old re-develop tag is gone
+        marks["pictures"] = {k: v for k, v in marks["pictures"].items() if any(v.get(x) for x in ("stars", "flag", "tags", "caption", "taken", "people", "date_note", "rescan", "edit", "colour"))}
         tmp = folder / (META_FILE + ".part")
         tmp.write_text(json.dumps(marks, indent=1, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
@@ -660,7 +791,8 @@ class LibraryMixin:
         m = marks.get("pictures", {}).get(rel) or {}
         return {"stars": int(m.get("stars") or 0), "flag": m.get("flag") or None, "tags": list(m.get("tags") or []),
                 "people": list(m.get("people") or []), "caption": m.get("caption") or "", "date_note": m.get("date_note") or "",
-                "redo": bool(m.get("redo")), "edit": tidy_edit(m.get("edit"))}
+                "rescan": bool(m.get("rescan")), "edit": tidy_edit(m.get("edit")), "taken_own": bool(m.get("taken_own")),
+                "colour": m.get("colour") if m.get("colour") in ("own", "roll") else None}
 
     def _lib_edit_of(self, folder, rel):
         """The crop and turn kept for a picture, or None."""
@@ -684,6 +816,15 @@ class LibraryMixin:
                 self.lib_taken.clear()
             self.lib_taken[tag] = got
         return got
+
+    def _lib_taken_of(self, folder, rel, m=None):
+        """When the photo was taken: what the file says, or the app's own list (Library.json) for a picture
+        whose file could not take the date (a RAW file, a file Lightroom has written into)."""
+        if m is None:
+            m = self._lib_marks(folder)["pictures"].get(rel)
+        if m and m.get("taken_app") and m.get("taken"):
+            return str(m["taken"])
+        return self._lib_taken(folder / rel)
 
     def _lib_write_file(self, folder, rel, m, taken=None):
         """Put a picture's marks into the file itself (XMP + EXIF), so Lightroom sees them. '' if done, else why not."""
@@ -737,8 +878,14 @@ class LibraryMixin:
         if not files:
             return {"ok": False, "error": "No pictures picked."}
         date = body.get("date") if isinstance(body.get("date"), dict) else None
-        problems, changed = [], 0
-        only_app = set(body) - {"key", "file", "files"} <= {"redo", "edit"}   # nothing to write into the files then
+        problems, changed, left = [], 0, 0
+        own = False
+        if date and not date.get("roll"):   # a date for some of the folder's pictures only is their own date
+            try:
+                own = len(set(files)) < len(self.library_roll(key)["pictures"])
+            except (OSError, ValueError):
+                own = len(files) == 1
+        only_app = set(body) - {"key", "file", "files"} <= {"rescan", "edit", "colour"}   # nothing to write into the files then
         with self.lib_lock:
             marks = self._lib_marks(folder)
             pics = marks["pictures"]
@@ -752,8 +899,10 @@ class LibraryMixin:
                     m["caption"] = str(body["caption"] or "").strip()[:2000]
                 if "date_note" in body:
                     m["date_note"] = str(body["date_note"] or "").strip()[:200]
-                if "redo" in body:   # tagged to be developed again from its RAW (kept in the app's list only)
-                    m["redo"] = bool(body["redo"])
+                if "rescan" in body:   # tagged to be scanned again from the film (kept in the app's list only)
+                    m["rescan"] = bool(body["rescan"])
+                if "colour" in body:   # this picture's own colour or the roll's: kept in the app's list only
+                    m["colour"] = body["colour"] if body["colour"] in ("own", "roll") else None
                 if "edit" in body:   # crop and turn: kept in the app's list only, the file is never changed
                     m["edit"] = tidy_edit(body["edit"])
                 for kind in ("tags", "people"):   # people: who is in the picture (also written as keywords)
@@ -766,7 +915,10 @@ class LibraryMixin:
                     m[kind] = [t for t in words if t.lower() not in drop]
                 taken = None
                 if date:
-                    t = self._lib_taken(folder / rel)
+                    if date.get("roll") and m.get("taken_own") and not date.get("all"):
+                        left += 1      # a date for the whole roll leaves pictures that were given their own
+                        continue
+                    t = self._lib_taken_of(folder, rel, m)
                     old = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S") if t else None
                     try:
                         taken = self._new_taken(old, date.get("how"), date.get("value"), n)
@@ -774,8 +926,11 @@ class LibraryMixin:
                         return {"ok": False, "error": "That date is not right."}
                     m.setdefault("taken_was", t or None)
                     m["taken"] = taken.strftime("%Y-%m-%d %H:%M:%S")
+                    m["taken_own"] = own   # changed by itself or with a few others: its own date
                 pics[rel] = m
                 why = "" if only_app else self._lib_write_file(folder, rel, m, taken)
+                if date:
+                    m["taken_app"] = bool(why)   # the file could not take it: the app's list is where the date is
                 if why:
                     problems.append(f"{rel}: {why}")
                 changed += 1
@@ -783,10 +938,11 @@ class LibraryMixin:
         what = ", ".join(dict.fromkeys(w for w, k in (("stars", "stars"), ("flag", "flag"), ("caption", "caption"),
                                          ("tags", "add_tags"), ("tags", "remove_tags"), ("people", "add_people"),
                                          ("people", "remove_people"), ("date taken", "date"), ("date note", "date_note"),
-                                         ("re-develop tag", "redo"), ("crop and turn", "edit")) if k in body))
+                                         ("rescan tag", "rescan"), ("crop and turn", "edit"),
+                                         ("own or roll colour", "colour")) if k in body))
         self.say(f"library: {what or 'nothing'} changed for {changed} picture(s) in {folder.name if key else 'the scans folder'}"
                  + (f"; {len(problems)} kept in the app's list only" if problems else ""))
-        return {"ok": True, "changed": changed, "problems": problems}
+        return {"ok": True, "changed": changed, "problems": problems, "left": left}
 
     # ------------------------------------------------------------------ search
     def library_search(self, text):
@@ -894,45 +1050,310 @@ class LibraryMixin:
             return {"ok": False, "error": "sips could not make the JPEG: " + (r.stderr or r.stdout).strip()[-300:]}
         return {"ok": True, "saved": str(target.relative_to(folder)), "folder": self._short_path(out_dir)}
 
-    # ------------------------------------------------------------------ tagged to be re-developed
-    def library_redo(self):
-        """Every picture tagged for re-development, by folder: what the Re-develop page lists to open."""
+    # ------------------------------------------------------------------ the roll's film colour (FilmProfile.json in its folder)
+    def _lib_raw_of(self, folder, path, rel):
+        """The RAW file of a finished picture (Positive/<name> or a picture in the folder itself), or None."""
+        parts = rel.split("/")
+        if len(parts) > 2 or (len(parts) == 2 and parts[0] != "Positive"):
+            return None   # RAW files themselves, and other versions (Re-developed, Edited), are left as they are
+        stem = path.name.rsplit(".", 1)[0]
+        for cand in (folder / "RAW" / path.name, folder / "RAW" / f"{stem}.tif"):
+            if cand.is_file():
+                return cand
+        return None
+
+    def _lib_exposures(self, folder, stem, note):
+        if note.get("exposures"):
+            return note["exposures"]
+        try:
+            got = json.loads((folder / COLOUR_FILE).read_text(encoding="utf-8"))["frames"].get(stem)
+            return got.get("exposures") if isinstance(got, dict) else None
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def _lib_fix(self, folder, path, rel):
+        """The roll's film colour for one picture: ({"numbers", "m"}, "") when it can be put on, else
+        (None, why not). m is how the saved picture was made from its RAW file (filmfix.match), kept."""
+        nums = self._lib_numbers(folder)
+        own = self._lib_own_colour(folder, path, rel)
+        if nums is None and not own:
+            return None, ""
+        if own:
+            nums = None   # this picture on its own, whatever the roll says
+        raw = self._lib_raw_of(folder, path, rel)
+        if raw is None:
+            return None, ("RAW files and other versions are shown as they are." if "/" in rel and not rel.startswith("Positive/")
+                          else "It has no RAW file (only Archive mode keeps one), which the film colour is worked out from.")
+        try:
+            ps, rs = path.stat(), raw.stat()
+        except OSError as e:
+            return None, str(e)
+        key = (str(path), ps.st_mtime_ns, ps.st_size, rs.st_mtime_ns, rs.st_size)
+        cache = self.__dict__.setdefault("lib_match", OrderedDict())
+        m = cache.get(key)
+        if m is None:
+            try:
+                note = read_tiff_info(raw).get("coolscan") or {}
+                if note.get("film") not in (None, "negative"):
+                    m = {"why": "It is not a colour negative."}
+                else:
+                    exposures = self._lib_exposures(folder, raw.name.rsplit(".", 1)[0], note)
+                    if not exposures:
+                        m = {"why": "It was scanned before the app kept the scanner's exposures, which the film colour needs."}
+                    else:
+                        pos, _ = read_small(path, 1000)
+                        if len(pos) != 3:
+                            m = {"why": "It is not a colour picture."}
+                        else:
+                            rp, _ = read_small(raw, 1000)
+                            crop = note.get("crop")
+                            if crop and len(crop) == 4:
+                                rows, cols = rp[0].shape
+                                r0, r1 = int(round(crop[1] * rows)), int(round(crop[3] * rows))
+                                c0, c1 = int(round(crop[0] * cols)), int(round(crop[2] * cols))
+                                if r1 - r0 > 16 and c1 - c0 > 16:
+                                    rp = [p[r0:r1, c0:c1] for p in rp]
+                            space = space_of(read_tiff_info(path).get("icc"))
+                            m = filmfix.match(pos, space, filmfix.density(rp[:3], exposures)) or {"bad": True}
+                            m["space"] = space
+                            if m.get("bad"):
+                                m["why"] = ("The picture does not match its RAW file closely enough (colour restoration or "
+                                            "grain reduction was used, or it was made another way), so it is shown as saved.")
+            except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error) as e:
+                m = {"why": f"Its RAW file could not be read ({e})."}
+            cache[key] = m
+            while len(cache) > 400:
+                cache.popitem(last=False)
+        if m.get("why"):
+            return None, m["why"]
+        if filmfix.same_already(m, nums):
+            return None, ("It was saved with its own colour already." if own else "It was saved with this colour already.")
+        return {"numbers": nums, "m": m}, ""
+
+    def _lib_numbers(self, folder, d=None):
+        """The roll's film numbers. A roll measured before the app kept how much film there is at each
+        density has its frames looked at once more here (their RAW files, read small), so the roll gets
+        its colour curve; that is done once and kept in FilmColour.json."""
+        nums = filmfix.roll_numbers(folder, d)
+        if nums is None or "curve" in nums or (d or filmfix.read_roll(folder) or {}).get("mode") not in ("roll", "base"):
+            return nums
+        tried = self.__dict__.setdefault("lib_curve_tried", {})
+        stamp = filmfix.files_stamp(folder)
+        if tried.get(str(folder)) == stamp:
+            return nums
+        with self.__dict__.setdefault("lib_curve_lock", threading.Lock()):
+            if tried.get(str(folder)) != filmfix.files_stamp(folder):
+                added = self._lib_measure_roll(folder)
+                tried[str(folder)] = filmfix.files_stamp(folder)
+                if added:
+                    self.say(f"library: looked at {added} RAW file(s) of {folder.name} for the roll's colour curve")
+        return filmfix.roll_numbers(folder, d)
+
+    def _lib_measure_roll(self, folder):
+        """Add "q" (how much film at each density) to the roll's measured frames that have none, from their
+        RAW files. Returns how many were added."""
+        try:
+            data = json.loads((folder / COLOUR_FILE).read_text(encoding="utf-8"))
+            frames = data["frames"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return 0
+        added = 0
+        for stem, f in list(frames.items()) if isinstance(frames, dict) else []:
+            if not isinstance(f, dict) or f.get("q") or not f.get("exposures"):
+                continue
+            raw = folder / "RAW" / f"{stem}.tif"
+            try:
+                if not raw.is_file() or (read_tiff_info(raw).get("coolscan") or {}).get("film") not in (None, "negative"):
+                    continue
+                planes, _ = read_small(raw, 1400)
+                if len(planes) < 3:
+                    continue
+                f["q"] = filmfix.frame_quantiles(planes[:3], f["exposures"])
+                added += 1
+            except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error):
+                continue
+        if added:
+            try:
+                tmp = folder / (COLOUR_FILE + ".part")
+                tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+                os.replace(tmp, folder / COLOUR_FILE)
+            except OSError:
+                return 0
+            cache = getattr(self, "_colour_cache", None)
+            if cache is not None and cache[0] == str(folder):
+                self._colour_cache = None   # the scanning side reads the file again
+        return added
+
+    def _lib_own_colour(self, folder, path, rel):
+        """True when a picture goes by its own colour, not the roll's: set on the picture in the Library
+        ("colour" in Library.json: "own" or "roll"), else what scanning noted (another film on that strip)."""
+        c = (self._lib_marks(folder)["pictures"].get(rel) or {}).get("colour")
+        if c in ("own", "roll"):
+            return c == "own"
+        return filmfix.frame_is_own(folder, path.name.rsplit(".", 1)[0])
+
+    def _lib_colour_state(self, folder):
+        """For the page: where the folder's film colour comes from, and what can be picked."""
+        d = filmfix.read_roll(folder) or {"mode": "frame"}
+        nums = self._lib_numbers(folder, d) if d["mode"] != "frame" else None
+        measured = len(filmfix.measured_frames(folder))
+        st = filmfix.files_stamp(folder)
+        return {"mode": d["mode"], "name": d.get("name") or "", "words": filmfix.MODE_WORDS[d["mode"]],
+                "numbers": {k: nums[k] for k in ("lo", "hi")} if nums else None, "curve": bool(nums and "curve" in nums),
+                "measured": measured, "least": 3, "base_from": d.get("from") if d.get("base") else None,
+                "has_base": bool(d.get("base")),
+                "profiles": sorted(n for n, p in self.settings["film_profiles"].items() if isinstance(p, dict)),
+                "stamp": hashlib.sha1(repr(st).encode()).hexdigest()[:10],
+                "raw": (folder / "RAW").is_dir()}
+
+    def _lib_colour_changed(self, folder):
+        """The scanning screen goes by the same file: when it is the roll being scanned into, show it there."""
+        if hasattr(self, "roll_colour_changed"):
+            self.roll_colour_changed(folder)
+        with self.lock:
+            self.version += 1
+
+    def library_film_colour(self, key, mode, name=""):
+        """Where a folder's film colour comes from, kept in its FilmProfile.json (no picture file is changed)."""
+        folder = self._lib_folder(key)
+        mode = str(mode or "")
+        if mode not in filmfix.MODES:
+            return {"ok": False, "error": "That is not a way to colour negatives."}
+        old = filmfix.read_roll(folder) or {}
+        d = {"mode": mode}
+        if mode == "profile":
+            p = self.settings["film_profiles"].get(str(name or ""))
+            if not isinstance(p, dict):
+                return {"ok": False, "error": "That film profile is not there any more."}
+            d.update(name=str(name), lo=p["lo"], hi=p["hi"], frames=p.get("frames"), curve=p.get("curve"))
+        elif mode == "roll":
+            p = film_profile_from(filmfix.measured_frames(folder))
+            if p is None:
+                n = len(filmfix.measured_frames(folder))
+                return {"ok": False, "error": f"This roll has {n} measured frame(s); its own colour needs at least 3 "
+                                              "(frames are measured when they are scanned as colour negatives)."}
+            d.update(lo=p["lo"], hi=p["hi"], frames=p["frames"])
+        elif mode == "base":
+            if old.get("mode") != "base" and not old.get("base"):
+                return {"ok": False, "error": "Pick the film base on a picture first: open a picture and press Film base…"}
+            d.update({k: old[k] for k in ("lo", "hi", "base", "from", "spot") if k in old})
+        try:
+            if mode == "frame" and not old:
+                pass   # no file is the same as each frame on its own
+            else:
+                if old.get("base") and mode != "base":
+                    d.update({"base": old["base"], "from": old.get("from"), "spot": old.get("spot"),
+                              "base_lo": old.get("lo") if old.get("mode") == "base" else old.get("base_lo"),
+                              "base_hi": old.get("hi") if old.get("mode") == "base" else old.get("base_hi")})
+                if mode == "base" and not d.get("lo"):
+                    d["lo"], d["hi"] = old.get("base_lo"), old.get("base_hi")
+                filmfix.write_roll(folder, d)
+        except OSError as e:
+            return {"ok": False, "error": f"Could not save the film colour ({e.strerror or e})."}
+        self.say(f"library: colour of negatives in {folder.name}: {filmfix.MODE_WORDS[mode]}"
+                 + (f' "{name}"' if mode == "profile" else ""))
+        self._lib_colour_changed(folder)
+        return {"ok": True, "film_colour": self._lib_colour_state(folder)}
+
+    def library_film_base(self, key, rel, x, y):
+        """Measure the film base (the clear film between or beside the frames) at a spot of a picture's RAW
+        file, and colour the folder's negatives from it."""
+        folder, path = self._lib_file(key, rel)
+        raw = self._lib_raw_of(folder, path, rel) if not rel.startswith("RAW/") else path
+        if raw is None:
+            return {"ok": False, "error": "The film base is measured on the RAW file, and this picture has none."}
+        note = read_tiff_info(raw).get("coolscan") or {}
+        if note.get("film") not in (None, "negative"):
+            return {"ok": False, "error": "The film base is for colour negatives."}
+        exposures = self._lib_exposures(folder, raw.name.rsplit(".", 1)[0], note)
+        if not exposures:
+            return {"ok": False, "error": "This picture was scanned before the app kept the scanner's exposures, so its "
+                                          "film base cannot be compared with other frames. Try a picture scanned later."}
+        try:
+            x, y = min(1.0, max(0.0, float(x))), min(1.0, max(0.0, float(y)))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Click on the picture."}
+        planes, _ = read_small(raw, 1600)
+        base, spread = filmfix.base_at(planes[:3], exposures, x, y)
+        frame = frame_colour([(np.clip(p, 0, 1) * 65535).astype(np.uint16) for p in planes[:3]], exposures)
+        measured = film_profile_from(filmfix.measured_frames(folder))
+        hi = (measured or frame or {}).get("hi")
+        if not hi:
+            return {"ok": False, "error": "Could not measure this frame."}
+        if min(h - b for b, h in zip(base, hi)) < 0.2:
+            return {"ok": False, "error": "That spot is as dense as the picture itself, so it is not clear film. Click on "
+                                          "the film between the frames or along its edge (in a negative it is the "
+                                          "lightest, orange or yellow part), not on the holder."}
+        warn = []
+        if spread > 0.12:
+            warn.append("The spot is uneven (an edge or dust?): if the colours look wrong, click a plainer bit of clear film.")
+        if frame and any(b > f + 0.15 for b, f in zip(base, frame["lo"])):
+            warn.append("Parts of the picture are thinner than that spot, so it may not be clear film.")
+        d = {"mode": "base", "lo": [round(v, 4) for v in base], "hi": [round(float(v), 4) for v in hi],
+             "base": [round(v, 4) for v in base], "from": rel, "spot": [round(x, 4), round(y, 4)]}
+        try:
+            filmfix.write_roll(folder, d)
+        except OSError as e:
+            return {"ok": False, "error": f"Could not save the film colour ({e.strerror or e})."}
+        self.say(f"library: film base of {folder.name} picked on {path.name}")
+        self._lib_colour_changed(folder)
+        return {"ok": True, "warn": " ".join(warn), "base": d["base"], "film_colour": self._lib_colour_state(folder)}
+
+    # ------------------------------------------------------------------ ticked pictures to the Re-develop page
+    def library_send_to_develop(self, key, files):
+        """Hand the ticked pictures of a folder to the Re-develop page: it opens their RAW folder with
+        their RAW files ticked. Kept until the page takes it (once)."""
+        folder = self._lib_folder(key)
+        raw_dir = folder / "RAW"
+        raws = {n.rsplit(".", 1)[0]: n for n in _tifs(raw_dir)} if raw_dir.is_dir() else {}
+        pics = []
+        for rel in sorted({str(f) for f in files or []}):
+            stem = rel.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            pics.append({"file": rel, "name": rel.rsplit("/", 1)[-1], "raw": raws.get(stem)})
+        n = sum(1 for x in pics if x["raw"])
+        if not n:
+            return {"ok": False, "error": "None of these pictures has a RAW file (only Archive mode keeps one), so they cannot be developed again."}
+        self.lib_handoff = {"key": key, "name": folder.name, "pictures": pics, "path": self._short_path(raw_dir), "raw_count": n}
+        return {"ok": True, "raw_count": n, "without_raw": len(pics) - n}
+
+    def library_redo(self, take=False):
+        """What the Library handed to the Re-develop page (none, or one folder's pictures); take clears it."""
+        h = getattr(self, "lib_handoff", None)
+        if take:
+            self.lib_handoff = None
+        return {"ok": True, "rolls": [h] if h else [], "total": len(h["pictures"]) if h else 0}
+
+    def library_rescan(self):
+        """Every picture tagged to be scanned again, by roll, with its frame number and the film, so the
+        strips can be found and put back in the scanner."""
         out = []
         for r in self.library_rolls()["rolls"]:
-            if not r.get("redo"):
+            if not r.get("rescan"):
                 continue
             try:
                 folder = self._lib_folder(r["key"])
             except ValueError:
                 continue
-            raw_dir = folder / "RAW"
-            raws = {n.rsplit(".", 1)[0]: n for n in _tifs(raw_dir)} if raw_dir.is_dir() else {}
-            pics = []
+            pics, film = [], ""
             for rel, m in sorted(self._lib_marks(folder)["pictures"].items()):
-                if m.get("redo") and (folder / rel).is_file():
-                    stem = rel.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-                    pics.append({"file": rel, "name": rel.rsplit("/", 1)[-1], "raw": raws.get(stem)})
+                if not (m.get("rescan") and (folder / rel).is_file()):
+                    continue
+                name = rel.rsplit("/", 1)[-1]
+                f = re.search(r"_(\d{1,4})_R\d+", name) or re.search(r"_(\d{1,4})(?:_[A-Za-z]+)?\.tiff?$", name)
+                pics.append({"file": rel, "name": name, "frame": int(f.group(1)) if f else None,
+                             "caption": m.get("caption") or "", "v": int((folder / rel).stat().st_mtime), "edit": tidy_edit(m.get("edit"))})
+                if not film:
+                    try:
+                        d = read_tiff_info(folder / rel).get("description") or ""
+                        g = re.search(r"Film:\s*([^.\n]+)", d)
+                        film = g.group(1).strip() if g else ""
+                    except (OSError, ValueError):
+                        pass
             if pics:
-                out.append({"key": r["key"], "name": r["name"], "pictures": pics, "path": self._short_path(raw_dir),
-                            "raw_count": sum(1 for p in pics if p["raw"])})
+                pics.sort(key=lambda p: (p["frame"] is None, p["frame"] or 0, p["name"]))
+                out.append({"key": r["key"], "name": r["name"], "film": film, "description": r.get("description") or "",
+                            "path": self._short_path(folder), "pictures": pics})
         return {"ok": True, "rolls": out, "total": sum(len(r["pictures"]) for r in out)}
-
-    def library_untag_redo(self, folder, stems):
-        """Take the re-develop tag off the pictures of a folder whose RAW files (by name without .tif) were
-        developed again. Returns how many were untagged."""
-        stems = set(stems)
-        if not stems or not Path(folder).is_dir():
-            return 0
-        n = 0
-        with self.lib_lock:
-            marks = self._lib_marks(Path(folder))
-            for rel, m in marks["pictures"].items():
-                if m.get("redo") and rel.rsplit("/", 1)[-1].rsplit(".", 1)[0] in stems:
-                    m["redo"] = False
-                    n += 1
-            if n:
-                self._lib_save_marks(Path(folder), marks)
-        return n
 
     def library_redevelop(self, key, rel):
         """Open the Re-develop page on a picture's RAW file, so its crop can be changed from the whole frame."""

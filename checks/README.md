@@ -24,7 +24,7 @@ on your Mac where those files are.
 | `test_build.py` | every Python file compiles, every module loads, the page's scripts parse, `coolscan.py --help`, the app starts with `--demo` and serves its pages, `--test`, and (where nkscan is installed) that the driver calls the app makes still exist |
 | `test_optional.py` | the app loads, starts and scans with `extras/notify.py` and test mode taken out |
 | `test_checks.py` | runs each script in `scripts/` (below) in a throwaway copy of the app with a throwaway HOME |
-| `test_pages.py` | runs the browser scripts in `page/` against the app (needs node and its playwright package; skipped without them) |
+| `test_pages.py` | runs the browser scripts in `page/` against the app (and `page_models.js` once per pretend model) (needs node and its playwright package; skipped without them) |
 | `conftest.py` | shared helpers: copying the app, starting it on a free port |
 
 Everything writes into throwaway folders: never into `~/Pictures/Coolscan`, `~/.coolscan.json`
@@ -51,6 +51,7 @@ The older checks are plain scripts, and each still runs on its own, e.g.
 | `thumb_reuse_test.py` | reusing the strip's thumbnail pass |
 | `applog_test.py` | the app log (JSON Lines in logs/), scanner codes in plain words, deleting old logs, Clear cache |
 | `notify_optional_test.py` | the app with or without `notify.py` |
+| `models_test.py` | other Coolscan models (LS-50, LS-4000, LS-5000, LS-8000, LS-9000, slide holders, the SA-30 roll) with the pretend scanner; the LS-40 left as it was |
 | `check_dust.py` | the dust cleaner on a made-up negative |
 | `test_test.py`, `strip_test_test.py`, `preview_test_test.py` | test mode (kept out of git with it) |
 | `run_next.py`, `watch_next.py`, `dust_app_next.py`, `enh_app.py` | print what the app does in made-up situations, for reading |

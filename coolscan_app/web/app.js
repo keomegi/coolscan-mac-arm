@@ -1,7 +1,8 @@
 'use strict';
 // The page asks the app for its state twice a second and draws it. Two ideas run through it:
 //  - the frame you are LOOKING at (cur) is shown big; clicking a frame only looks at it
-//  - the frames you TICKED (sel) are what Scan takes; with none ticked, Scan takes the whole strip
+//  - the frames you TICKED (sel) are what Scan takes; with none ticked, Scan takes the whole strip.
+//    A tick only selects: Scan (or, while a strip is scanned, "Add to scan" / "Take out of scan") acts, and unticks them
 let S = null, sel = new Set(), cur = null, anchor = null;
 let lastV = -1, lastStrip = null, lastShape = '', shownPic = '', lastPreset = '';
 let picking = false, cropping = false, drag = null, descHold = 0;
@@ -24,11 +25,13 @@ function toScreen(p, k) { let [x, y] = p; for (let n = 0; n < k; n++) [x, y] = [
 function toScanner(p, k) { let [x, y] = p; for (let n = 0; n < k; n++) [x, y] = [1 - y, x]; return [x, y]; }
 function tile(i) { return (S && S.tiles && S.tiles[i]) || {}; }
 
+// what a film format is called (the scanner's names are 645, 67, ...)
+const FORMAT_NAMES = {'135': '35 mm', half: 'Half frame', IX240: 'APS (IX240)', '16': '16 mm', '645': '6×4.5', '66': '6×6', '67': '6×7', '68': '6×8', '69': '6×9'};
 // ---------------------------------------------------------------- settings: every control saves when changed
 const keys = ['film', 'format', 'preview_dpi', 'invert_preview', 'rotate180', 'focus_mode', 'focus_position', 'exposure_mode',
   'white_balance', 'dpi', 'samples', 'clean', 'negatives', 'archive', 'outdir', 'basename', 'digits', 'start', 'photo_date',
   'colour_space', 'name_date', 'tone', 'stop_on_errors', 'eject_after', 'scan_log', 'auto_thumbnail', 'dust_method', 'grain',
-  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan', 'auto_crop', 'use_roll', 'overwrite', 'frame_fit', 'auto_crop_trim', 'auto_crop_sides', 'notify_on', 'log_days', 'archive_default', 'auto_crop_learn', 'preview_af', 'preview_ae'];
+  'restore', 'notify_mac', 'notify_shortcut', 'notify_ntfy', 'multi_exposure', 'crop_scan', 'auto_crop', 'use_roll', 'overwrite', 'frame_auto', 'show_frame_offset', 'auto_crop_trim', 'auto_crop_sides', 'notify_on', 'log_days', 'archive_default', 'auto_crop_learn', 'crop_learn_delete_after', 'auto_turn', 'auto_turn_learn', 'preview_af', 'preview_ae', 'show_rotate180', 'auto_preview', 'superfine'];
 keys.forEach(k => { const e = $('s-' + k); e.addEventListener('change', () => api('/api/settings', {[k]: e.type === 'checkbox' ? e.checked : e.value})); });
 
 // ---------------------------------------------------------------- film profiles: the colour of a film, measured from a roll
@@ -36,7 +39,7 @@ function profileSay(text) { const m = $('profilemsg'); m.hidden = !text; m.textC
 $('filmprofile').onchange = async () => {
   const r = await api('/api/film_profile', {action: 'use', name: $('filmprofile').value});
   profileSay(r.ok ? '' : (r.busy ? 'Wait until the scan finishes, then pick it again.' : (r.error || 'That did not work.')));
-  if (!r.ok) $('filmprofile').value = S.settings.film_profile || '';
+  if (!r.ok) { const rc = S.roll_colour || {}; $('filmprofile').value = rc.mode === 'roll' ? '@roll' : rc.mode === 'base' ? '@base' : rc.mode === 'profile' ? rc.name : ''; }
 };
 $('b-profilenew').onclick = () => {
   const st = S.settings, film = [st.film_brand, st.film_stock, st.film_iso].filter(Boolean).join(' ');
@@ -70,25 +73,46 @@ $('b-eject').onclick = () => api('/api/eject');
 $('b-thumb').onclick = () => api('/api/thumbnail');
 $('b-preview').onclick = () => api('/api/preview', {frames: targets()});
 $('b-sharper').onclick = () => { if (cur !== null) api('/api/preview', {frames: [cur]}); };
-// Scan; with "Allow overwriting" and a typed number the app first names the pictures it would replace
-let overFrames = [];
-$('b-scan').onclick = async () => {
-  const frames = ticked(), r = await api('/api/scan', {frames});
-  if (!r.confirm_overwrite) return;
-  overFrames = frames;
+// Scan. Two things are asked first when they apply: frames scanned already with nothing changed since
+// (scan them again?), and, with "Allow overwriting" and a typed number, the pictures it would replace.
+// Once the scan has started the ticks are taken off: they have done their work.
+let overFrames = [], overFlags = {}, againAsk = null;
+function unTick() { sel.clear(); anchor = null; render(true); }
+function frameNames(list) {
+  const n = list.map(i => i + 1);
+  return n.length === 1 ? 'Frame ' + n[0] : 'Frames ' + n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+}
+function askAgain(same, frames, go) {   // go(frames) carries on with the scan, the question answered
+  const all = frames.length ? frames : S.frames, others = all.filter(i => !same.includes(i));
+  againAsk = {go, all, others};
+  $('againmsg').textContent = frameNames(same) + (same.length === 1 ? ' was' : ' were') + ' already scanned with exactly these settings. Scan '
+    + (same.length === 1 ? 'it' : 'them') + ' again?';
+  $('b-againothers').hidden = !others.length;
+  $('b-againothers').textContent = others.length === 1 ? 'Scan only frame ' + (others[0] + 1) : 'Scan only the other ' + others.length;
+  $('againdlg').showModal(); $('b-againcancel').focus();
+}
+$('b-againcancel').onclick = () => $('againdlg').close();
+$('b-againok').onclick = () => { $('againdlg').close(); againAsk.go(againAsk.all); };
+$('b-againothers').onclick = () => { $('againdlg').close(); againAsk.go(againAsk.others); };
+async function startScan(frames, flags) {
+  const r = await api('/api/scan', {frames, ...flags});
+  if (r.confirm_again) { askAgain(r.confirm_again, frames, f => startScan(f, {...flags, again_ok: true})); return; }
+  if (!r.confirm_overwrite) { if (r.ok) unTick(); return; }
+  overFrames = frames; overFlags = flags || {};
   const n = r.confirm_overwrite.length, ul = $('overwritelist');
   $('overwritemsg').textContent = plural(n, 'picture') + ' in ' + (r.folder || 'the folder') + ' will be replaced by this scan:';
   ul.innerHTML = '';
   r.confirm_overwrite.slice(0, 12).forEach(s => { const li = document.createElement('li'); li.textContent = s; ul.appendChild(li); });
   if (n > 12) { const li = document.createElement('li'); li.textContent = '…and ' + (n - 12) + ' more'; ul.appendChild(li); }
   $('overwritedlg').showModal(); $('b-overcancel').focus();
-};
+}
+$('b-scan').onclick = () => startScan(ticked(), {});
 $('b-overcancel').onclick = () => $('overwritedlg').close();
-$('b-overok').onclick = () => { $('overwritedlg').close(); api('/api/scan', {frames: overFrames, overwrite_ok: true}); };
+$('b-overok').onclick = () => { $('overwritedlg').close(); startScan(overFrames, {...overFlags, overwrite_ok: true}); };
 $('b-overskip').onclick = async () => {
   $('overwritedlg').close();
   await api('/api/settings', {overwrite: false});  // back to skipping names in use; the typed number stays the start
-  api('/api/scan', {frames: overFrames});
+  startScan(overFrames, overFlags);
 };
 $('b-choosefolder').onclick = async () => {
   const r = await api('/api/choose_folder'), m = $('foldermsg');
@@ -129,6 +153,12 @@ $('lastline').onclick = () => setLog(true);
 
 // ---------------------------------------------------------------- keyboard shortcuts
 $('b-keys').onclick = () => $('keysdlg').showModal();
+$('b-archinfo').onclick = () => $('archdlg').showModal();
+$('b-archok').onclick = () => $('archdlg').close();
+// the cards on the left in the order of the work: the roll, the film, how to scan, how to save
+for (const id of ['g-roll', 'g-film', 'g-scan', 'g-focus', 'g-presets']) { const c = $(id); if (c) $('side').appendChild(c); }
+// "Photo taken" belongs to the roll: it sits in the Roll card, above the description
+{ const row = $('s-photo_date').closest('.row'), before = document.querySelector('#g-roll label[for=rolldesc]'); if (row && before) before.before(row); }
 $('b-keysok').onclick = () => $('keysdlg').close();
 
 // ---------------------------------------------------------------- focus and exposure
@@ -224,20 +254,85 @@ document.querySelectorAll('.card .q').forEach(b => {
 function look(i) {
   const inTiles = $('tiles').contains(document.activeElement);
   cur = i; anchor = i; setCropping(false); render(true);
-  if (inTiles) { const t = $('tiles').querySelector('.tile[data-i="' + i + '"]'); if (t) t.focus(); }
+  if (inTiles) { const t = $('tiles').querySelector('.tile[data-i="' + i + '"]'); if (t) t.focus(longStrip() ? {preventScroll: true} : undefined); }
+  if (longStrip()) showTile(i);
 }
+// A long strip (an SA-30 roll, a holder with several strips: more than 6 frames, so never the LS-40's
+// SA-21) is one row of bigger frames that scrolls sideways, with ◀ ▶ under it.
+// wide window: the frames are a column beside the big picture (style.css, 1080 px and up)
+const COLUMN = matchMedia('(min-width:1080px)');
+function inColumn() { return document.body.classList.contains('main') && COLUMN.matches; }
+COLUMN.addEventListener('change', () => { if (S) render(true); });
+function longStrip() { return !!S && S.frames.length > 6; }
+function showTile(i) { const t = $('tiles').querySelector('.tile[data-i="' + i + '"]'); if (t) t.scrollIntoView({block: 'nearest', inline: 'nearest'}); }
+function longPos() {
+  const box = $('tiles'), tiles = [...box.children]; if (!tiles.length) return;
+  const q = box.getBoundingClientRect(), l = box.scrollLeft, r = l + box.clientWidth;
+  const seen = tiles.filter(t => { const m = t.getBoundingClientRect(); return m.left >= q.left - 4 && m.right <= q.right + 4; }).map(t => tiles.indexOf(t) + 1);
+  $('longpos').textContent = seen.length ? 'Showing ' + seen[0] + (seen.length > 1 ? '–' + seen[seen.length - 1] : '') + ' of ' + tiles.length + ' along the strip' : '';
+  $('b-longl').disabled = l <= 0; $('b-longr').disabled = r >= box.scrollWidth - 1;
+}
+$('tiles').addEventListener('scroll', () => { if (longStrip()) longPos(); }, {passive: true});
+$('b-longl').onclick = () => $('tiles').scrollBy({left: -$('tiles').clientWidth * 0.9, behavior: 'smooth'});
+$('b-longr').onclick = () => $('tiles').scrollBy({left: $('tiles').clientWidth * 0.9, behavior: 'smooth'});
 $('tiles').addEventListener('focusin', ev => { const t = ev.target.closest('.tile'); if (t && +t.dataset.i !== cur) look(+t.dataset.i); });
+// A tick only selects. While a strip is scanned, the two buttons above the frames put the ticked frames
+// into the running scan (at the end; one scanned already is scanned again) or take the waiting ones out.
+function inQueue(i) { return (S.queue || []).some(q => q.i === i && (q.state === 'waiting' || q.state === 'scanning')); }
+function isWaiting(i) { return (S.queue || []).some(q => q.i === i && q.state === 'waiting'); }
 function tick(i, on) { on ? sel.add(i) : sel.delete(i); anchor = i; render(true); }
+async function queueAdd(frames, flags) {
+  const r = await api('/api/queue', {action: 'add', frames, ...flags});
+  if (r.confirm_again) { askAgain(r.confirm_again, frames, f => queueAdd(f, {again_ok: true})); return; }
+  if (r.error) say(r.error); else unTick();
+}
+$('b-qadd').onclick = () => queueAdd(ticked().filter(i => !inQueue(i)), {});
+$('b-qout').onclick = async () => {
+  const r = await api('/api/queue', {action: 'remove', frames: ticked().filter(isWaiting)});
+  if (r.error) say(r.error); else unTick();
+};
+function say(text) { const l = $('lastline'); if (l) { l.textContent = text; l.classList.add('bad'); setTimeout(() => l.classList.remove('bad'), 4000); } }
+// The queue while a strip is scanned shows on the frame cards themselves (Scanning…, Next, 2nd in line, Done):
+// there is no separate row of it.
+function drawQueue() { $('queue').hidden = true; }
+const ORD = n => n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th');
+function queuePlace(i) {   // {text, cls, sooner} for frame i while a strip is scanned, or null
+  if (!S || S.job !== 'scan' || !(S.queue || []).length) return null;
+  const q = S.queue, waiting = q.filter(it => it.state === 'waiting'), k = waiting.findIndex(it => it.i === i);
+  if (q.some(it => it.i === i && it.state === 'scanning')) return {text: 'Scanning now', cls: 'scanning'};
+  if (k === 0) return {text: 'Next', cls: 'waiting', sooner: false};
+  if (k > 0) return {text: ORD(k + 1) + ' in line', cls: 'waiting', sooner: true};
+  const last = [...q].reverse().find(it => it.i === i);
+  if (last && last.state === 'failed') return {text: 'Failed', cls: 'failed'};
+  if (last && last.state === 'done') return {text: 'Done', cls: 'done'};
+  return null;
+}
+function drawQueuePlace(d, i) {
+  let box = d.querySelector('.qplace');
+  if (!box) {
+    box = document.createElement('span'); box.className = 'qplace';
+    const t = document.createElement('span'); t.className = 'qtext';
+    const up = document.createElement('button'); up.className = 'qsoon'; up.type = 'button'; up.tabIndex = -1; up.textContent = '↑ Sooner';
+    up.onclick = ev => { ev.stopPropagation(); api('/api/queue', {action: 'earlier', frame: +d.dataset.i}); };
+    box.append(t, up); d.querySelector('.side').appendChild(box);
+  }
+  const p = queuePlace(i);
+  box.hidden = !p || p.cls === 'scanning' || p.cls === 'done'; if (box.hidden) return;   // those two have their badge on the picture
+  box.className = 'qplace ' + p.cls; box.querySelector('.qtext').textContent = p.text;
+  const up = box.querySelector('.qsoon'); up.hidden = !p.sooner; up.title = 'Scan frame ' + (i + 1) + ' sooner';
+}
 $('tiles').addEventListener('click', ev => {
   const t = ev.target.closest('.tile'); if (!t || ev.target.closest('.tick')) return;   // the tick box has its own handler
   if (ev.target.closest('.fsbtn')) { look(+t.dataset.i); openFrameSets(); return; }
+  const v = ev.target.closest('.atbtn');
+  if (v) { api('/api/turnlearn', {action: v.dataset.a, frames: [+t.dataset.i]}); return; }
   const i = +t.dataset.i;
   if (ev.shiftKey && anchor !== null) { for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) sel.add(k); cur = i; render(true); }
   else if (ev.metaKey || ev.ctrlKey) { cur = i; tick(i, !sel.has(i)); }
   else look(i);
 });
 $('tiles').addEventListener('change', ev => { const t = ev.target.closest('.tile'); if (t) tick(+t.dataset.i, ev.target.checked); });
-$('tiles').addEventListener('dblclick', ev => { const t = ev.target.closest('.tile'); if (t && !ev.target.closest('.tick') && !ev.target.closest('.fsbtn')) { cur = +t.dataset.i; render(true); openZoom(); } });
+$('tiles').addEventListener('dblclick', ev => { const t = ev.target.closest('.tile'); if (t && !ev.target.closest('.tick') && !ev.target.closest('.fsbtn') && !ev.target.closest('.autoturn')) { cur = +t.dataset.i; render(true); openZoom(); } });
 $('b-all').onclick = () => { S.frames.forEach(i => sel.add(i)); render(true); };
 $('b-none').onclick = () => { sel.clear(); render(true); };
 const turn = quarter => api('/api/rotate', {frames: targets().length ? targets() : S.frames, quarter});
@@ -255,11 +350,33 @@ $('zoom').addEventListener('click', () => $('zoom').close());
 $('b-zoom').onclick = openZoom;
 $('imgw').addEventListener('dblclick', () => { if (!cropping && !picking) openZoom(); });  // on the picture or on its crop box
 
-function setCropping(on) { cropping = on; drag = null; if (on) setPicking(false); document.body.classList.toggle('cropping', on); $('b-crop').setAttribute('aria-pressed', String(on)); }
-$('b-crop').onclick = () => { setCropping(!cropping); render(true); };
-$('b-autocrop').onclick = async () => {
-  if (cur === null) return;
-  await api('/api/autocrop', {frame: cur});   // what it found, or that it found nothing, goes to the Activity list
+// Crop works as on the Scanned pictures page: Crop opens the box (where auto crop puts it when the frame has no
+// crop yet), the box is changed on screen only, Done keeps it, Cancel (or Esc) leaves the crop as it was.
+let pend = null;   // the box while Crop is open, as fractions of the picture on screen
+function setCropping(on) {
+  cropping = on; drag = null; if (!on) pend = null; if (on) setPicking(false);
+  document.body.classList.toggle('cropping', on); $('b-crop').setAttribute('aria-pressed', String(on));
+  $('b-crop').textContent = on ? 'Cancel' : 'Crop'; $('b-cropdone').hidden = !on;
+}
+const WHOLE = [0, 0, 1, 1];
+function isWhole(r) { return !r || (r[0] <= 0 && r[1] <= 0 && r[2] >= 1 && r[3] >= 1); }
+async function startCrop() {
+  if (cur === null || !tile(cur).src) return;
+  const i = cur, t = tile(i);
+  let r = cropOnScreen(t);
+  if (!r) {   // no crop yet: the box starts where auto crop puts it
+    try { const a = await api('/api/autocrop', {frame: i, save: false}); if (a && a.rect) r = cropOnScreen({crop: a.rect, turns: t.turns}); } catch (e) { /* the whole frame then */ }
+    if (cur !== i) return;
+  }
+  setCropping(true); pend = r || WHOLE.slice(); render(true);
+}
+$('b-crop').onclick = () => { if (cropping) { setCropping(false); render(true); } else startCrop(); };
+$('b-cropdone').onclick = async () => {
+  if (!cropping || cur === null) return;
+  const r = pend, had = !!tile(cur).crop;
+  if (isWhole(r)) { if (had) await api('/api/crop', {frame: cur, rect: null}); }
+  else await saveCrop(r);
+  setCropping(false); render(true);
 };
 $('b-cropclear').onclick = async () => { if (cur !== null) { await api('/api/crop', {frame: cur, rect: null}); setCropping(false); } };
 function at(ev) { const r = $('big').getBoundingClientRect(), f = v => Math.min(1, Math.max(0, v)); return [f((ev.clientX - r.left) / r.width), f((ev.clientY - r.top) / r.height)]; }
@@ -307,25 +424,28 @@ async function saveCrop(r) {
   const k = tile(cur).turns || 0, a = toScanner([r[0], r[1]], k), b = toScanner([r[2], r[3]], k);
   await api('/api/crop', {frame: cur, rect: [a[0], a[1], b[0], b[1]]});
 }
-function cropNow() { const t = tile(cur); return cur === null || !t.src ? null : (cropOnScreen(t) || (cropping ? [0, 0, 1, 1] : null)); }
+function cropNow() { const t = tile(cur); return cur === null || !t.src ? null : boxOnScreen(t); }
+// a new box: while Crop is open it is only shown (Done keeps it)
+function setBox(r) { if (cropping) { pend = r; render(true); } else saveCrop(r); }
 $('cropratio').onchange = () => {
   cropShape = $('cropratio').value; try { localStorage.setItem('coolscan.cropshape', cropShape); } catch (e) { /* fine */ }
   const r = cropNow(), px = r && keptShape(pxShape(r) >= 1);
-  if (r && px) saveCrop(shapedAround(r, px)); else render(true);
+  if (r && px) setBox(shapedAround(r, px)); else render(true);
 };
 $('b-cropswap').onclick = () => {
   const r = cropNow(); if (!r) return;
   const A = picAspect(), cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2;
   let fw = (r[3] - r[1]) / A, fh = (r[2] - r[0]) * A;   // the same pixel size, turned
   const s = Math.min(1, 2 * Math.min(cx, 1 - cx) / fw, 2 * Math.min(cy, 1 - cy) / fh); fw *= s; fh *= s;
-  saveCrop([cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2]);
+  setBox([cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2]);
 };
 // what the crop comes to in pixels. The size of the whole frame is worked out from the picture's shape
-// and a 35 mm frame as the LS-40 scans it (4320 px across at 2900 dpi), so it is an estimate
+// and a 35 mm frame as the LS-40 scans it (4320 px across at 2900 dpi), so it is an estimate.
+// 120 film and the small formats send their own frame length (caps.frame_long_in)
 function showCropSize(r) {
   const t = tile(cur), el = $('cropsize');
   if (!r || !S) { el.textContent = ''; return; }
-  const dpi = +S.settings.dpi || 2900, A = picAspect(), long = 4320 / 2900 * dpi;
+  const dpi = +S.settings.dpi || 2900, A = picAspect(), long = (S.caps && S.caps.frame_long_in ? S.caps.frame_long_in : 4320 / 2900) * dpi;
   const W = A >= 1 ? long : long * A, H = A >= 1 ? long / A : long;
   const w = Math.round((r[2] - r[0]) * W), h = Math.round((r[3] - r[1]) * H), px = w / h;
   const named = [[1.5, '3:2'], [4 / 3, '4:3'], [1.25, '5:4'], [1, 'square'], [16 / 9, '16:9']]
@@ -376,20 +496,20 @@ function cropOnScreen(t) {
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
 }
 // the box on screen: the crop, or while Crop is pressed on a frame without one, the whole frame, ready to drag in
-function boxOnScreen(t) { return cropOnScreen(t) || (cropping && t.src ? [0, 0, 1, 1] : null); }
+function boxOnScreen(t) { return cropping && t.src ? (pend || WHOLE.slice()) : cropOnScreen(t); }
 function placeCrop(r) { const box = $('cropbox'); box.hidden = !r; showCropSize(r); if (r) Object.assign(box.style, {left: r[0] * 100 + '%', top: r[1] * 100 + '%', width: (r[2] - r[0]) * 100 + '%', height: (r[3] - r[1]) * 100 + '%'}); }
 const iw = $('imgw');
 iw.addEventListener('pointerdown', ev => {
   if (cur === null) return;
   if (picking) { setPicking(false); api('/api/settings', {focus_point: toScanner(at(ev), tile(cur).turns || 0)}); return; }
   const box = $('cropbox'), held = ev.target.dataset && ev.target.dataset.h, shown = boxOnScreen(tile(cur));
-  const placeholder = !tile(cur).crop;   // the whole-frame box Crop shows before there is a crop: its middle draws a new one
+  if (!cropping) return;   // the box is changed only while Crop is open
+  const placeholder = isWhole(shown);   // the whole-frame box: its middle draws a new one
   if (shown && (held || (ev.target === box && !placeholder))) {   // a side or corner of the crop, or its middle: change the crop that is there
     ev.preventDefault(); iw.setPointerCapture(ev.pointerId);
     drag = {edit: held || 'move', r: shown, a: at(ev), b: at(ev), shift: ev.shiftKey};
     document.body.classList.add('cropdrag'); return;
   }
-  if (!cropping) return;
   ev.preventDefault(); iw.setPointerCapture(ev.pointerId); drag = {a: at(ev), b: at(ev)}; placeCrop(dragRect());
 });
 iw.addEventListener('pointermove', ev => { if (drag) { drag.b = at(ev); placeCrop(dragRect()); } });
@@ -399,8 +519,7 @@ iw.addEventListener('pointerup', async ev => {
   drag = null; document.body.classList.remove('cropdrag');
   if (edited && still) { render(true); return; }   // a click on the crop: nothing changed
   if (r[2] - r[0] < MIN_CROP || r[3] - r[1] < MIN_CROP) { render(true); return; }   // a click, not a drag: the crop stays as it was
-  await saveCrop(r);
-  if (!edited) setCropping(false);
+  pend = r; render(true);   // kept with Done
 });
 iw.addEventListener('pointercancel', () => { drag = null; document.body.classList.remove('cropdrag'); render(true); });
 
@@ -427,6 +546,7 @@ document.addEventListener('keydown', ev => {
     case '[': press('b-rl'); break;
     case ']': press('b-rr'); break;
     case 'c': case 'C': press('b-crop'); break;
+    case 'Enter': if (cropping && tag !== 'BUTTON') { ev.preventDefault(); press('b-cropdone'); } break;
     case 'p': case 'P': press('b-preview'); break;
     case 't': case 'T': press('b-thumb'); break;
     case 'a': case 'A': setLog(!logOpen); break;
@@ -443,12 +563,38 @@ function fillSelect(id, vals, curVal, lab) {
 }
 function optionText(id) { const e = $(id), o = e.options[e.selectedIndex]; return o ? o.textContent : ''; }
 
-// The frames in the order they lie on the film as the thumbnail pass saw it, left to right (on the
-// LS-40 that is the last frame first). Without a thumbnail pass: in frame order.
+// The order the frame cards are shown in: frame 1 first. (They used to follow the strip as the
+// thumbnail pass saw it, which on the LS-40 puts the last frame first; D found that backwards.)
 function stripOrder() {
-  const at = {}; for (const b of S.boxes || []) at[b.i] = b.x + b.w / 2;
-  return S.frames.slice().sort((a, b) => ((at[a] ?? a) - (at[b] ?? b)) || a - b);
+  return S.frames.slice().sort((a, b) => a - b);
 }
+// the strip's frame direction (every frame turned 180° or not), found by auto rotate before each frame's own turn
+function drawStripTurn() {
+  const st = S.strip_turn, bar = $('stripturn');
+  $('row-rotate180').hidden = !S.settings.show_rotate180;
+  bar.hidden = !st || !S.frames.length;
+  if (bar.hidden) return;
+  $('stripturntext').textContent = '↻ Frame direction found: ' + (st.turned ? 'every frame turned 180°'
+    : 'frames not turned 180°') + ' (' + st.agree + ' of ' + st.frames + ' frames agree). Is this right?';
+  $('b-stripok').disabled = $('b-stripno').disabled = !!S.job;
+}
+// a strip that looks like another film than the roll it is being scanned into
+function drawFilmWarn() {
+  const w = S.film_warning, bar = $('filmwarn');
+  bar.hidden = !w;
+  if (!w) return;
+  $('filmwarntext').textContent = '⚠ This strip looks like a different film than the rest of ' + (w.roll || 'this folder')
+    + ': its film base is another colour (' + w.frames + (w.frames === 1 ? ' frame' : ' frames') + ' against ' + w.compared + ' earlier ones). '
+    + (w.had_colour ? 'Its frames are coloured each on their own for now, not with the roll\'s colour. ' : '')
+    + 'Is it another film?';
+}
+$('b-filmnew').onclick = () => $('b-newroll').click();
+$('b-filmsame').onclick = () => api('/api/film_warning', {action: 'same'});
+$('b-filmown').onclick = () => api('/api/film_warning', {action: 'own'});
+$('b-stripok').onclick = () => api('/api/turnlearn', {action: 'strip_accept'});
+$('b-stripno').onclick = () => api('/api/turnlearn', {action: 'strip_reject'});
+
+let lastNow = null;
 function drawTiles() {
   const box = $('tiles'), n = S.frames.length, order = stripOrder();
   const shape = S.strip + '|' + order.join(',') + '|' + S.frames.map(i => tile(i).v + ':' + tile(i).src).join(',');
@@ -461,8 +607,8 @@ function drawTiles() {
       const pic = document.createElement('div'); pic.className = 'pic';
       if (t.src) { const im = document.createElement('img'); im.src = '/frame/' + i + '.png?v=' + t.v; im.alt = 'Frame ' + (i + 1); im.draggable = false; pic.appendChild(im); }
       else { const s = document.createElement('span'); s.className = 'none'; s.textContent = 'No picture yet'; pic.appendChild(s); }
-      const lab = document.createElement('label'); lab.className = 'tick'; lab.title = 'Tick to scan this frame';
-      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.tabIndex = -1; cb.setAttribute('aria-label', 'Scan frame ' + (i + 1));
+      const lab = document.createElement('label'); lab.className = 'tick'; lab.title = 'Tick to select this frame';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.tabIndex = -1; cb.setAttribute('aria-label', 'Select frame ' + (i + 1));
       const num = document.createElement('span'); num.textContent = i + 1; lab.append(cb, num);
       // left of the picture: what this frame is scanned with, and whether that is its own or everyone's
       const side = document.createElement('div'); side.className = 'side';
@@ -477,26 +623,42 @@ function drawTiles() {
       if (kind === 'scan' || kind === 'preview') { const b = document.createElement('span'); b.className = 'badge ' + kind; b.textContent = kind === 'scan' ? 'Scanned' : 'Preview'; pic.appendChild(b); }
       const mb = document.createElement('span'); mb.className = 'moved'; mb.hidden = true; mb.title = 'Moved along the strip by hand'; pic.appendChild(mb);
       const sk = document.createElement('span'); sk.className = 'skipped'; pic.appendChild(sk);
+      // a turn auto rotate made by itself: marked until the person keeps it or turns it back
+      const at = document.createElement('div'); at.className = 'autoturn'; at.hidden = true;
+      const atw = document.createElement('span'); atw.className = 'atwords'; atw.textContent = '↻ Auto rotated';
+      const ok = document.createElement('button'); ok.className = 'small atbtn ok'; ok.dataset.a = 'accept'; ok.tabIndex = -1;
+      ok.textContent = '✓ Accept'; ok.title = 'Keep this turn (auto rotate learns it guessed right)';
+      const no = document.createElement('button'); no.className = 'small atbtn no'; no.dataset.a = 'reject'; no.tabIndex = -1;
+      no.textContent = '✕ Reject'; no.title = 'Turn it back (auto rotate learns it guessed wrong)';
+      at.append(atw, ok, no); pic.appendChild(at);
       const nb = document.createElement('span'); nb.className = 'badge now'; nb.textContent = 'Scanning…'; nb.hidden = true; pic.appendChild(nb);
       box.appendChild(d);
     }
   }
   // the frame the scanner is on now (scans of a strip only: they are the ones that take long)
   const tm = S.timing || {}, now = S.job === 'scan' && tm.frame ? tm.frame - 1 : null;
+  const long = n > 6; box.classList.toggle('long', long);
+  $('longnav').hidden = !long || inColumn();   // in the column beside the big picture a long strip simply scrolls down
+  if (long) { if (now !== null && now !== lastNow) showTile(now); requestAnimationFrame(longPos); }
+  lastNow = now;
   for (const d of box.children) {      // what is looked at, what is ticked and what is scanned now: only the marks change
     const i = +d.dataset.i;
-    d.classList.toggle('cur', cur === i); d.classList.toggle('ticked', sel.has(i)); d.classList.toggle('now', now === i);
+    const on = sel.has(i);
+    d.classList.toggle('cur', cur === i); d.classList.toggle('ticked', on); d.classList.toggle('now', now === i);
     d.tabIndex = cur === i || (cur === null && i === 0) ? 0 : -1;
     d.setAttribute('aria-label', 'Frame ' + (i + 1) + (now === i ? ', scanning now' : ''));
     d.querySelector('.badge.now').hidden = now !== i;
     const w = tile(i).window || {}, mv = d.querySelector('.moved');   // a frame moved by hand
     mv.hidden = !w.shift; if (w.shift) mv.textContent = (w.shift * (S.settings.rotate180 ? -1 : 1) > 0 ? '▶ ' : '◀ ') + Math.abs(Math.round(w.moved || 0)) + '%';
     for (const b of d.querySelectorAll('.badge:not(.now)')) b.hidden = now === i;
-    d.setAttribute('aria-selected', String(sel.has(i))); d.querySelector('input').checked = sel.has(i);
-    drawFrameSide(d, i);
+    d.setAttribute('aria-selected', String(on)); d.querySelector('input').checked = on;
+    drawFrameSide(d, i); drawQueuePlace(d, i);
     const t2 = tile(i), sk = d.querySelector('.skipped'), miss = t2.src === 'preview' && t2.preview_skipped ? t2.preview_skipped : {};
     const words = [('af' in miss) && 'AF off', ('ae' in miss) && 'AE off'].filter(Boolean);
     sk.hidden = !words.length || now === i; sk.textContent = words.join(' · ');
+    const au = !!t2.turn_auto && !!t2.src, at = d.querySelector('.autoturn');
+    d.classList.toggle('auto', au); at.hidden = !au || now === i;
+    if (au) at.title = 'Auto rotate turned this frame by itself' + (t2.turn_hint && t2.turn_hint.p ? ' (' + Math.round(t2.turn_hint.p * 100) + '% sure)' : '');
     sk.title = words.length ? 'This preview was made with ' + ['af' in miss && 'no autofocus', 'ae' in miss && 'the exposure of the last preview, not metered'].filter(Boolean).join(' and ') + ' (Settings ⚙ › Preview scan)' : '';
   }
   $('noframes').hidden = n > 0;
@@ -511,11 +673,30 @@ async function nudge(screenDir, reset) {
   if (r && r.busy) $('posinfo').textContent = 'Wait until the scan finishes.';
 }
 $('b-nudgel').onclick = () => nudge(-1); $('b-nudger').onclick = () => nudge(1); $('b-nudge0').onclick = () => nudge(0, true);
+// every frame on the strip together (the frames were all put a bit too far one way); Shift = 5 presses
+async function nudgeStrip(screenDir, reset, ev) {
+  const steps = screenDir * (S.settings.rotate180 ? -1 : 1) * (ev && ev.shiftKey ? 5 : 1);
+  const r = await api('/api/nudge', reset ? {strip: true, reset: true} : {strip: true, steps});
+  if (r && r.busy) $('posinfo').textContent = 'Wait until the scan finishes.';
+}
+$('b-stripl').onclick = (e) => nudgeStrip(-1, false, e); $('b-stripr').onclick = (e) => nudgeStrip(1, false, e);
+$('b-strip0').onclick = () => nudgeStrip(0, true);
+function drawStripOffset(busy) {   // by the frames: every frame on the strip together, like Nikon Scan's Strip Film Offset
+  const w0 = tile(0).window, on = !!S.settings.show_frame_offset && !!w0 && !!S.thumb;
+  $('stripoff').hidden = !on; if (!on) return;
+  const v = Math.round(w0.strip_moved || 0) * (S.settings.rotate180 ? -1 : 1);
+  $('stripoffval').textContent = (v > 0 ? '+' : '') + v + '%';
+  $('b-strip0').hidden = !w0.strip_shift;
+  for (const id of ['b-stripl', 'b-stripr', 'b-strip0']) $(id).disabled = busy;
+}
 function drawFramePos(t, busy) {
-  const w = t.window, show = cur !== null && !!w && !!S.thumb;
+  drawStripOffset(busy);
+  const w = t.window, show = !!S.settings.show_frame_offset && cur !== null && !!w && !!S.thumb;
   $('framepos').hidden = !show; if (!show) return;
-  const m = Math.round(w.moved || 0), dir = (w.shift || 0) * (S.settings.rotate180 ? -1 : 1);
-  $('posinfo').textContent = [w.fitted ? 'fitted to the gaps' : (S.settings.frame_fit ? 'no clear gap: where the scanner put it' : 'where the scanner put it'),
+  const flip = S.settings.rotate180 ? -1 : 1;
+  const m = Math.round(w.moved || 0), dir = (w.shift || 0) * flip;
+  $('posinfo').textContent = [w.fitted ? 'placed on the gaps' : w.realigned ? 'moved off the gap onto its own picture'
+      : (S.settings.frame_auto ? 'no clear gap: where the scanner put it' : 'where the scanner put it'),
     w.shift ? 'moved ' + Math.abs(m) + '% ' + (dir > 0 ? 'right' : 'left') : ''].filter(Boolean).join(' · ');
   $('b-nudge0').hidden = !w.shift;
   for (const id of ['b-nudgel', 'b-nudger', 'b-nudge0']) $(id).disabled = busy;
@@ -530,7 +711,7 @@ function drawViewer(busy) {
   $('vinfo').textContent = has ? t.info : '';
   $('imgw').hidden = !has; $('vempty').hidden = has;
   $('vempty').textContent = cur === null ? (S.frames.length ? 'Click a frame above to see it here.' : 'Nothing to show yet.')
-    : 'No picture of this frame yet. Press Preview scan to look at it.';
+    : 'No picture of this frame yet. Press Preview to look at it.';
   if (has) {
     const pic = '/frame/' + cur + '.png?v=' + t.v;
     if (pic !== shownPic) { $('big').src = pic; shownPic = pic; }
@@ -539,14 +720,26 @@ function drawViewer(busy) {
   if (!drag) placeCrop(has ? boxOnScreen(t) : null);
   const fp = S.settings.focus_point, mark = $('fmark'); mark.hidden = !(has && fp);
   if (has && fp) { const q = toScreen(fp, t.turns || 0); mark.style.left = q[0] * 100 + '%'; mark.style.top = q[1] * 100 + '%'; }
-  $('b-cropclear').hidden = !t.crop;
-  $('croptools').hidden = !(has && (cropping || t.crop));
-  for (const id of ['b-crop', 'b-zoom', 'b-autocrop']) $(id).disabled = !has;
-  $('b-sharper').disabled = busy || cur === null; $('b-rl').disabled = $('b-rr').disabled = busy || !S.frames.length;
+  $('b-cropclear').hidden = !(cropping && t.crop);
+  $('croptools').hidden = !(has && cropping);
+  for (const id of ['b-crop', 'b-zoom']) $(id).disabled = !has;
+  $('b-sharper').disabled = busy || cur === null; $('b-rl').disabled = $('b-rr').disabled = busy || !S.frames.length || cropping;
+  const th = t.turn_hint, vt = $('vturn');
+  vt.hidden = !(th && cur !== null && (th.applied ? th.turn : th.quarter));
+  if (!vt.hidden) {
+    $('vturntext').textContent = th.applied ? 'Auto rotate turned this frame ' + th.words + ' (' + Math.round(th.p * 100) + '% sure). Accept keeps it, Reject turns it back; it learns from either.'
+      : 'Auto rotate thinks this frame goes ' + th.words + ' (' + Math.round(th.p * 100) + '% sure).' + (th.small ? ' A thumbnail is too small for it to turn by itself: it looks again at the scan, before the files are saved.' : '');
+    $('b-turnhint').hidden = !!th.applied;
+    $('b-turnok').hidden = $('b-turnno').hidden = !(th.applied && t.turn_auto);
+    $('b-turnok').onclick = () => api('/api/turnlearn', {action: 'accept', frames: [cur]});
+    $('b-turnno').onclick = () => api('/api/turnlearn', {action: 'reject', frames: [cur]});
+    $('b-turnhint').onclick = () => api('/api/rotate', {frames: [cur], quarter: th.quarter});
+  }
   const sv = $('vsaved'), saved = t.saved || [];
   sv.hidden = !saved.length && !cropping && !t.crop;
-  sv.textContent = cropping ? 'Drag a side or corner of the box to choose the part to save, or its middle to move it. The crop is used when this frame is scanned.'
-    : [saved.length ? 'Saved from this frame: ' + saved.map(s => s.files.join(', ') + ' (' + clock(s.took) + ')').join(' · ') : '',
+  sv.textContent = cropping ? 'Drag a side or corner of the box to choose the part to save, or its middle to move it, then press Done. The crop is used when this frame is scanned.'
+    : [saved.length ? 'Saved from this frame: ' + saved.map(s => s.files.join(', ') + ' (' + clock(s.took) + ')').join(' · ')
+         + '. Crop and turn it here and the change is kept for the saved picture, as in Scanned pictures: the file stays as it is. Press Scan to scan it again with the new crop.' : '',
        t.crop ? (S.settings.archive ? 'Cropped: only the marked part is saved in Positive (Archive mode scans the whole frame, and its RAW file keeps it).'
                  : S.settings.crop_scan ? 'Cropped: only the marked part is scanned and saved, which is quicker.'
                  : 'Cropped: only the marked part is saved (the whole frame is scanned).')
@@ -570,7 +763,7 @@ function drawSummaries(st) {
   const logs = +st.log_days ? 'logs ' + st.log_days + ' days' : 'logs kept';
   $('archtoggle').classList.toggle('on', !!st.archive);
   $('archsub').textContent = st.archive ? 'RAW + Positive' : 'Off · one finished picture';
-  $('sum-extra').textContent = (st.archive_default ? 'starts in Archive mode · ' : '') + (st.auto_crop_learn ? '' : 'crop learning off · ') + (!S.notify ? '' : (st.notify_on ? 'messages: ' + (ways.join(', ') || 'none picked') : 'messages off') + ' · ') + logs;
+  $('sum-extra').textContent = (st.archive_default ? 'starts in Archive mode · ' : '') + (st.auto_crop_learn ? '' : 'crop learning off · ') + (!S.notify ? '' : (st.notify_on ? 'notifications: ' + (ways.join(', ') || 'none picked') : 'notifications off') + ' · ') + logs;
   const L = S.logs;
   $('loginfo').textContent = !L || !L.on ? 'Logs are written when the app runs with the scanner (not with --demo).'
     : L.files + ' file(s), ' + (L.bytes < 1048576 ? Math.ceil(L.bytes / 1024) + ' KB' : (L.bytes / 1048576).toFixed(1) + ' MB') + ' in ' + L.folder;
@@ -600,6 +793,7 @@ function scanSettings(st) {
     st.dpi + ' dpi',
     'dust removal: ' + dustWords(st.clean, st.dust_method, st.film),
     st.samples > 1 ? st.samples + 'x multi-sample' : '',
+    st.superfine && S.caps && S.caps.multi_line ? 'superfine' : '',
     +st.multi_exposure ? st.multi_exposure + 'x Multi-Exposure' : '',
     +st.grain ? 'grain ' + st.grain : '', +st.restore ? 'colour restore ' + textOf('restore', st.restore).toLowerCase() : '',
     'focus: ' + textOf('focus_mode', st.focus_mode).toLowerCase(),
@@ -701,6 +895,12 @@ function drawFrameSets() {
     s.closest('label').classList.toggle('mine', mine);
   }
   $('fs-reset').disabled = !Object.keys(own).length;
+  const qp = queuePlace(cur), when = $('fs-when');   // while a strip is scanned: what a change here does
+  when.hidden = !qp && !(S.job === 'scan');
+  when.textContent = !qp ? 'A scan is running. This frame is not in it: tick the frame and press “Add to scan”, and it is scanned with what you set here.'
+    : qp.cls === 'waiting' ? 'This frame is waiting (' + qp.text.toLowerCase() + '): it will be scanned with what you set here.'
+    : qp.cls === 'scanning' ? 'This frame is being scanned right now, so a change here comes too late for this pass. When it is done, tick it and press “Add to scan” to scan it once more with the new settings.'
+    : 'This frame is finished in this scan. Tick it and press “Add to scan” to scan it once more with what you set here.';
 }
 function openFrameSets() { if (cur === null || !S.frames.length) return; $('fs-also').checked = false; $('framedlg').showModal(); drawFrameSets(); }
 $('b-framesets').onclick = openFrameSets; $('vown').onclick = openFrameSets;
@@ -736,7 +936,11 @@ function render(force) {
   $('mehint').hidden = !+st.multi_exposure;
   $('mehint').textContent = st.samples > ms ? 'Left out while multi-sample averages passes: choose one of the two.' : 'A second pass exposed ' + st.multi_exposure + ' times longer: each frame takes at least twice as long. Not tried on the real scanner yet.';
   const fmts = c && c.film_formats ? c.film_formats : []; $('fmtrow').hidden = !fmts.length;
-  fillSelect('s-format', [''].concat(fmts), st.format, v => v || 'From holder');
+  fillSelect('s-format', [''].concat(fmts), st.format, v => v ? (FORMAT_NAMES[v] || v) : 'From holder');
+  $('superfinerow').hidden = !(c && c.multi_line);   // only units whose sensor reads its lines at once (the LS-5000)
+  if (c && c.model && c.model !== 'LS-40') {   // the timing was measured on an LS-40: say so on other models (the LS-40's text is left as it is)
+    const pv = $('pvhelp'); if (pv.textContent.includes('your LS-40')) pv.innerHTML = pv.innerHTML.replace('your LS-40', 'an LS-40 (yours is an ' + c.model + ')');
+  }
   $('negrow').hidden = !!st.archive; $('cropscanrow').hidden = !!st.archive; $('dustrow').hidden = !st.clean || st.film === 'mono';
   $('cleanrow').hidden = st.film === 'mono'; $('monohint').hidden = st.film !== 'mono'; $('kchint').hidden = st.film !== 'kodachrome';
   const iceopt = $('s-dust_method').querySelector('option[value=ice]'); iceopt.hidden = iceopt.disabled = !S.ice_helper;
@@ -745,9 +949,19 @@ function render(force) {
     'b-rollno', 'b-rollnoyes', 'rollpick', 'preset', 'b-presetdelyes']) $(id).disabled = busy;
   $('b-stop').disabled = !busy;
   const nf = S.frames.length, ns = sel.size;
-  $('b-scan').textContent = ns ? 'Scan ' + plural(ns, 'selected frame') : (nf ? 'Scan all ' + plural(nf, 'frame') : 'Scan all frames');
+  // the button says what it will do; while a strip is scanned, how far it is
+  const sq = S.job === 'scan' ? (S.queue || []) : [], sdone = sq.filter(it => it.state === 'done' || it.state === 'failed').length;
+  $('b-scan').textContent = sq.length ? 'Scanning ' + Math.min(sdone + 1, sq.length) + ' of ' + sq.length
+    : ns ? 'Scan ' + ns + ' selected' : (nf ? 'Scan whole strip (' + plural(nf, 'frame') + ')' : 'Scan whole strip');
   $('b-preview').textContent = ns ? 'Preview ' + ns + ' selected' : (cur !== null ? 'Preview frame ' + (cur + 1) : 'Preview');
-  $('framesum').textContent = nf ? (ns ? ns + ' of ' + nf + ' ticked for scanning' : plural(nf, 'frame') + ' · none ticked, so Scan takes the whole strip') : '';
+  // while a strip is scanned: the ticked frames go into the scan, or out of it, with these two buttons
+  const canAdd = sq.length ? ticked().filter(i => !inQueue(i)).length : 0, canOut = sq.length ? ticked().filter(isWaiting).length : 0;
+  $('qbtns').hidden = !sq.length;
+  $('b-qadd').disabled = !canAdd; $('b-qout').disabled = !canOut;
+  $('b-qadd').textContent = canAdd ? 'Add ' + canAdd + ' to scan' : 'Add to scan';
+  $('b-qout').textContent = canOut ? 'Take ' + canOut + ' out of scan' : 'Take out of scan';
+  $('framesum').textContent = !nf ? '' : sq.length ? (ns ? ns + ' of ' + nf + ' ticked' : 'Tick frames, then add them to this scan or take waiting ones out with the buttons here.')
+    : ns ? ns + ' of ' + nf + ' ticked for scanning' : plural(nf, 'frame') + ' · none ticked, so Scan takes the whole strip';
   $('b-all').disabled = $('b-none').disabled = !nf;
 
   // rolls
@@ -780,22 +994,30 @@ function render(force) {
 
   // film profiles
   $('profilebox').hidden = st.film !== 'negative';
-  const fp = $('filmprofile'), profs = S.film_profiles || [];
+  const fp = $('filmprofile'), profs = S.film_profiles || [], rc = S.roll_colour || {mode: 'frame', name: ''};
+  const n = S.roll_measured || 0, least = S.profile_least || 3;
+  // the roll's own colour (kept in the roll folder's FilmProfile.json, shared with Scanned pictures)
+  const rcValue = rc.mode === 'roll' ? '@roll' : rc.mode === 'base' ? '@base' : rc.mode === 'profile' ? rc.name : '';
   if (document.activeElement !== fp) {
-    const want = profs.map(p => p.name + '/' + p.frames).join('\n');
+    const kept = rc.mode === 'profile' && rc.name && !profs.some(p => p.name === rc.name) ? rc.name : '';
+    const want = profs.map(p => p.name + '/' + p.frames).join('\n') + '|' + n + '|' + rc.mode + '|' + kept;
     if (fp.dataset.v !== want) {
       fp.innerHTML = '';
-      const o = document.createElement('option'); o.value = ''; o.textContent = 'Each frame on its own'; fp.appendChild(o);
-      for (const p of profs) { const e = document.createElement('option'); e.value = p.name; e.textContent = p.name; fp.appendChild(e); }
+      const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; fp.appendChild(o); };
+      add('', 'Each frame on its own');
+      add('@roll', "This roll's frames (" + n + ')');
+      if (rc.mode === 'base') add('@base', 'Film base picked in Scanned pictures');
+      for (const p of profs) add(p.name, p.name);
+      if (kept) add(kept, kept + ' (kept with this roll)');
       fp.dataset.v = want;
     }
-    fp.value = st.film_profile || '';
+    fp.value = rcValue;
   }
-  const used = profs.find(p => p.name === st.film_profile), n = S.roll_measured || 0, least = S.profile_least || 3;
+  const used = profs.find(p => p.name === st.film_profile);
   $('profilehint').textContent = (used ? 'Measured from ' + used.frames + ' frames of ' + (used.roll || 'a roll') + (used.made ? ', ' + used.made : '') + '. ' : '')
     + 'This roll: ' + n + (n === 1 ? ' frame' : ' frames') + ' measured' + (n < least ? ' (a profile needs ' + least + ' or more; frames are measured when scanned).' : '.');
   fp.disabled = busy; $('b-profiledelyes').disabled = busy;
-  $('b-profilenew').disabled = n < least; $('b-profiledel').disabled = busy || !fp.value;
+  $('b-profilenew').disabled = n < least; $('b-profiledel').disabled = busy || !fp.value || fp.value[0] === '@' || !profs.some(p => p.name === fp.value);
 
   // focus and exposure
   const fl = S.focus_lock, el = S.exposure_lock, af = !c || c.autofocus;
@@ -813,7 +1035,7 @@ function render(force) {
     el ? 'Exposure: ' + Object.entries(el.exposures).map(([k, v]) => k[0].toUpperCase() + ' ' + v).join(', ') + (el.infrared ? ' (with IR)' : '') + (el.frame != null ? ' from frame ' + (el.frame + 1) : '') + '.'
       : 'Exposure: not set yet.'].join(' ');
 
-  drawTiles(); drawViewer(busy); drawSummaries(st); drawSetLine(st); drawFrameSets();
+  drawTiles(); drawStripTurn(); drawFilmWarn(); drawQueue(); drawViewer(busy); drawSummaries(st); drawSetLine(st); drawFrameSets();
   if (force || S.version !== lastV) lastV = S.version;
   drawLog();
 
@@ -855,7 +1077,7 @@ async function poll() {
 setLog(logOpen);
 poll();
 
-// ---------------------------------------------------------------- logs and cache (Additional settings)
+// ---------------------------------------------------------------- logs and cache (Settings, Logs)
 $('b-openlogs').onclick = () => api('/api/open_logs');
 $('b-clearcache').onclick = async () => {
   const r = await api('/api/clear_cache'), m = $('cachemsg');
@@ -864,11 +1086,15 @@ $('b-clearcache').onclick = async () => {
     : (r.error || 'That did not work.');
 };
 
-// ---------------------------------------------------------------- auto crop learning (Additional settings)
+// ---------------------------------------------------------------- auto crop learning (Settings, Crop)
 const SHORT = {simple: 'simple', net: 'net', cnn: 'CNN'};
 const KIND = {simple: 'Simple model', net: 'Small neural network', cnn: 'Picture network (CNN)', rule: 'Built-in rule'};
 function pc(v) { return v === null || v === undefined ? '–' : (v * 100).toFixed(1) + '%'; }
 function esc(t) { return String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+function reportHtml(rows, more) {
+  const h = list => list.map(([k, v]) => '<div class="clrow"><b>' + k + '</b><div>' + v + '</div></div>').join('');
+  return h(rows) + (more.length ? '<details class="clmore"><summary>More detail</summary>' + h(more) + '</details>' : '');
+}
 let learnTimer = null;
 async function croplearnShow() {
   let r;
@@ -878,23 +1104,43 @@ async function croplearnShow() {
   $('b-croplearn').textContent = r.busy ? 'Learning…' : 'Learn from my crops';
   clearTimeout(learnTimer);
   if (r.busy) learnTimer = setTimeout(croplearnShow, 2000);
+  const pk = r.pictures_kept || {};
+  $('b-croplearndelete').disabled = !pk.files;
+  $('b-croplearndelete').textContent = pk.files ? 'Delete learning pictures (' + pk.files + ', ' + pk.mb + ' MB)' : 'No learning pictures kept';
   if ($('croplearnreport').hidden) return;
-  const m = r.model, rows = [];
+  const m = r.model, rows = [], more = [];
+  if (r.role && r.role.text) more.push(['Whose model', esc(r.role.text)]);
   if (m) {
     const e = m.errors || {}, w = m.within_1pc || {};
     rows.push(['Learned from', m.pictures + ' crops (' + m.sides + ' sides), ' + esc(m.made.slice(0, 16)) + ', ' + esc(m.why || '')]);
-    rows.push(['In use', r.use ? KIND[r.running_kind] || r.running_kind : 'Built-in rule (nothing learned does better yet)']);
+    const kk = r.use ? m.kind : null;
+    rows.push(['In use', (r.use ? KIND[r.running_kind] || r.running_kind : 'Built-in rule (nothing learned does better yet)') +
+      (kk && e[kk] !== undefined && e[kk] !== null ? ': its edges land ' + pc(e[kk]) + ' of the frame from yours on average (built-in rule: ' + pc(m.error_rule) + ')' : '')]);
     let t = '<table class="clr"><tr><th></th><th>Off by</th><th>Within 1%</th></tr>';
     for (const k of ['simple', 'net', 'cnn']) if (e[k] !== undefined && e[k] !== null) t += '<tr><td>' + KIND[k] + (k === m.kind ? ' ✓' : '') + '</td><td>' + pc(e[k]) + '</td><td>' + pc(w[k]) + '</td></tr>';
+    if (e.shipped !== undefined && e.shipped !== null) t += '<tr><td>The app\'s model as it came</td><td>' + pc(e.shipped) + '</td><td>' + pc(w.shipped) + '</td></tr>';
     t += '<tr><td>' + KIND.rule + '</td><td>' + pc(m.error_rule) + '</td><td>' + pc(w.rule) + '</td></tr></table>';
-    rows.push(['How close to your crops', t + '<p class="hint">Edges tried on crops each model was not trained on (5 rounds), as a share of the frame.' + (m.cnn_tried ? '' : ' The picture network is tried from 12 crops' + (r.cnn_available ? '' : ' and needs MLX') + '.') + '</p>']);
+    more.push(['How close to your crops', t + '<p class="hint">Edges tried on crops each model was not trained on (5 rounds), as a share of the frame.' + (m.cnn_tried ? '' : ' The picture network is tried from 12 crops' + (r.cnn_available ? '' : ' and needs MLX') + '.') + '</p>']);
     const u = m.used || {};
-    rows.push(['Last learning took', u.seconds + ' s (processor time ' + u.cpu_seconds + ' s) on the ' + esc(u.device || '') +
+    more.push(['Last learning took', u.seconds + ' s (processor time ' + u.cpu_seconds + ' s) on the ' + esc(u.device || '') +
       '<br>App memory at most ' + u.memory_mb + ' MB' + (u.memory_added_mb ? ' (+' + u.memory_added_mb + ' MB while learning)' : '') +
       (u.gpu_memory_mb !== null && u.gpu_memory_mb !== undefined ? '<br>GPU memory at most ' + u.gpu_memory_mb + ' MB' : '')]);
   }
-  rows.push(['Cropping with it', r.crops_made ? r.crops_made + ' frames since the app started, ' + r.ms_per_crop + ' ms each' : 'not yet since the app started']);
-  rows.push(['Kept', r.hand_crops + ' crops from the scanning screen (plus the Library\'s), ' + r.new + ' new since it last learned; ' + r.store_mb + ' MB in <code>' + esc(r.store) + '</code>']);
+  more.push(['Cropping with it', r.crops_made ? r.crops_made + ' frames since the app started, ' + r.ms_per_crop + ' ms each' : 'not yet since the app started']);
+  const sp = r.steps;
+  if (sp && sp.pictures) {
+    const SIDEW = {left: 'left', top: 'top', right: 'right', bottom: 'bottom'};
+    let t = sp.pictures + ' picture' + (sp.pictures === 1 ? '' : 's') + ', ' + sp.steps + ' crop steps; ' + sp.several + ' took more than one step. Earlier steps you moved away from are learned as "not here".';
+    if (sp.from_auto) {
+      const mv = Object.keys(SIDEW).filter(k => sp.auto_moved[k] !== null && Math.abs(sp.auto_moved[k]) >= 0.001)
+        .map(k => SIDEW[k] + ' ' + (sp.auto_moved[k] > 0 ? 'in ' : 'out ') + Math.abs(sp.auto_moved[k] * 100).toFixed(1) + '%');
+      t += '<br>From auto crop\'s box to your final crop (' + sp.from_auto + ' pictures), on average: ' + (mv.length ? mv.join(', ') : 'kept as it was') + '.';
+    }
+    const KW = {auto: 'auto', saved: 'saved', hand: 'drawn'};
+    t += '<table class="clr"><tr><th>Picture</th><th>Steps</th><th>Way</th></tr>' + sp.recent.map(x => '<tr><td>' + esc(x.name || '') + '<br><span class="hint">' + esc(x.t.slice(5, 16)) + '</span></td><td>' + x.steps + '</td><td>' + x.kinds.map(k => KW[k] || k).join(' → ') + '</td></tr>').join('') + '</table>';
+    more.push(['Crop steps', t]);
+  }
+  rows.push(['Kept', r.hand_crops + ' crops from the scanning screen (plus those from Scanned pictures), ' + r.new + ' new since it last learned; ' + r.store_mb + ' MB in <code>' + esc(r.store) + '</code> (never goes to GitHub). What it learned (numbers only, no pictures): <code>' + esc(r.model_file || '') + '</code>, which goes to GitHub with the app.']);
   const h = r.history || [];
   if (h.length > 1) {
     let t = '<table class="clr"><tr><th>When</th><th>Crops</th><th>Used</th><th>Off by</th><th>Rule</th></tr>';
@@ -902,9 +1148,9 @@ async function croplearnShow() {
       const best = (x.errors || {})[x.kind];
       t += '<tr><td>' + esc((x.made || '').slice(5, 16)) + '</td><td>' + x.pictures + '</td><td>' + (x.use ? (SHORT[x.kind] || x.kind) : 'rule') + '</td><td>' + pc(best) + '</td><td>' + pc(x.error_rule) + '</td></tr>';
     }
-    rows.push(['Earlier runs', t + '</table>']);
+    more.push(['Earlier runs', t + '</table>']);
   }
-  $('croplearnreport').innerHTML = rows.map(([k, v]) => '<div class="clrow"><b>' + k + '</b><div>' + v + '</div></div>').join('');
+  $('croplearnreport').innerHTML = reportHtml(rows, more);
 }
 $('b-croplearn').onclick = async () => {
   $('b-croplearn').disabled = true;
@@ -912,12 +1158,151 @@ $('b-croplearn').onclick = async () => {
   if (!r.ok) $('croplearnmsg').textContent = r.error || 'That did not work.';
   setTimeout(croplearnShow, 300);
 };
+let turnTimer = null;
+async function turnlearnShow() {
+  let r;
+  try { r = await (await fetch('/api/turnlearn')).json(); } catch (e) { return; }
+  $('turnlearnmsg').textContent = (r.on ? '' : 'Learning is off. ') + (r.text || '');
+  $('b-turnlearn').disabled = !!r.busy;
+  $('b-turnlearn').textContent = r.busy ? 'Learning…' : 'Learn from my turns';
+  const al = r.all;
+  $('b-turnlearnall').disabled = !!r.busy || !!(al && al.busy);
+  $('b-turnlearnall').textContent = al && al.busy ? (al.learning ? 'Learning from Scanned pictures…' : 'Reading Scanned pictures… ' + (al.done || 0) + ' of ' + (al.of || '?'))
+    : 'Learn from all scanned pictures';
+  if (al && !al.busy) $('turnlearnmsg').textContent += (al.error ? ' All scanned pictures: ' + al.error : ' All scanned pictures: learned from ' + al.added + ' pictures and ' + (al.raws || 0) + ' views of their RAW files' + (al.failed ? ' (' + al.failed + ' could not be read)' : '') + '.');
+  clearTimeout(turnTimer);
+  if (r.busy || (r.all && r.all.busy)) turnTimer = setTimeout(turnlearnShow, 2000);
+  if ($('turnlearnreport').hidden) return;
+  const m = r.model, rows = [], more = [], TK = {simple: 'Simple model', net: 'Small neural network', cnn: 'Picture network (CNN)', shipped: 'The app\'s model as it came'};
+  const c = r.counts || {};
+  if (r.base) rows.push(['Ready-made model', esc(r.base.text) + (r.base.state === 'ready' ? ' It turns a picture by itself when it is ' + Math.round(r.base_sure * 100) + '% sure and the picture is at least ' + r.base_small + ' pixels on its longer side (a preview scan, a scan, a scanned picture); on thumbnails it only suggests. What was learned from your own turns, below, is used only without it.' : '')]);
+  rows.push(['Kept to learn from', (c.scan || 0) + ' frames from the scanning screen, ' + (c.library || 0) + ' scanned pictures; ' + r.new + ' new since it last learned']);
+  if (m) {
+    const bt = m.by_turn || [];
+    rows.push(['Learned from', m.pictures + ' pictures (' + esc(m.made.slice(0, 16)) + ', ' + esc(m.why || '') + '): ' + (bt[0] || 0) + ' as they were, ' + (bt[1] || 0) + ' turned left, ' + (bt[3] || 0) + ' turned right, ' + (bt[2] || 0) + ' upside down' + (m.left_as_they_were ? '; ' + m.left_as_they_were + ' of them only scanned or opened and left as they were, which count less' : '') + '. Turns are counted from how the frame was shown, so with "turn every frame 180°" on, a frame left alone counts as right that way up.']);
+    rows.push(['In use', r.use ? esc(r.running || '') + (r.auto ? '; turns by itself when ' + Math.round(r.sure * 100) + '% sure' : '; suggests only') : 'Nothing yet (not better than leaving frames as they are)']);
+    let t = '<table class="clr"><tr><th></th><th>Right way up</th><th>When sure</th></tr>';
+    for (const k of ['simple', 'net', 'cnn', 'shipped']) {
+      const a = (m.right || {})[k]; if (a === undefined || a === null) continue;
+      const s = (m.sure || {})[k] || {};
+      t += '<tr><td>' + TK[k] + (k === m.kind ? ' ✓' : '') + '</td><td>' + Math.round(a * 100) + '%</td><td>' + (s.n ? Math.round(s.right * 100) + '% of ' + s.n : '–') + '</td></tr>';
+    }
+    t += '<tr><td>Leave as it is</td><td>' + Math.round((m.right_keep || 0) * 100) + '%</td><td></td></tr></table>';
+    more.push(['How often right', t + '<p class="hint">On pictures each model was not trained on (5 rounds). "When sure": how often it was right when it was ' + Math.round(r.sure * 100) + '% sure or more; it turns by itself only when that is 95% or better.' + (m.cnn_tried ? '' : ' The picture network is tried from 24 pictures and needs MLX.') + '</p>']);
+    const u = m.used || {};
+    more.push(['Last learning took', u.seconds + ' s (processor time ' + u.cpu_seconds + ' s) on the ' + esc(u.device || '') + '<br>App memory at most ' + u.memory_mb + ' MB' + (u.gpu_memory_mb !== null && u.gpu_memory_mb !== undefined ? '<br>GPU memory at most ' + u.gpu_memory_mb + ' MB' : '')]);
+  }
+  more.push(['Since the app started', r.frames_looked ? r.frames_looked + ' frames looked at (' + r.ms_per_frame + ' ms each, ' + esc(r.device) + '), ' + r.turned_by_itself + ' turned by itself, ' + r.suggested + ' suggestions' : 'no frames looked at yet']);
+  rows.push(['Kept', (r.pictures_kept || {}).files + ' small greyscale copies (' + (r.pictures_kept || {}).mb + ' MB) in <code>' + esc(r.store) + '</code> (never goes to GitHub). What it learned (numbers only): <code>' + esc(r.model_file || '') + '</code>.']);
+  if (r.role && r.role.text) more.push(['Whose model', esc(r.role.text)]);
+  $('turnlearnreport').innerHTML = reportHtml(rows, more);
+}
+$('b-turnlearn').onclick = async () => {
+  $('b-turnlearn').disabled = true;
+  const r = await api('/api/turnlearn', {action: 'learn'});
+  if (!r.ok) $('turnlearnmsg').textContent = r.error || 'That did not work.';
+  setTimeout(turnlearnShow, 300);
+};
+$('b-turnlearnall').onclick = async () => {
+  $('b-turnlearnall').disabled = true;
+  const r = await api('/api/turnlearn', {action: 'library_all'});
+  if (!r.ok) $('turnlearnmsg').textContent = r.error || 'That did not work.';
+  setTimeout(turnlearnShow, 300);
+};
+$('b-turnlearnreport').onclick = () => {
+  const box = $('turnlearnreport'); box.hidden = !box.hidden;
+  $('b-turnlearnreport').setAttribute('aria-expanded', String(!box.hidden));
+  turnlearnShow();
+};
+let delArmed = 0;
+$('b-croplearndelete').onclick = async () => {
+  // asked twice (a second click within 5 s), not with a pop-up: the Mac app's window shows none
+  if (Date.now() - delArmed > 5000) {
+    delArmed = Date.now();
+    $('b-croplearndelete').textContent = 'Click again to delete them';
+    $('croplearndelmsg').textContent = 'What it learned stays. Crops from the scanning screen cannot be learned from again.';
+    setTimeout(() => { if (delArmed && Date.now() - delArmed >= 5000) croplearnShow(); }, 5100);
+    return;
+  }
+  delArmed = 0;
+  const r = await api('/api/croplearn', {action: 'delete_pictures'});
+  $('croplearndelmsg').textContent = r.ok ? 'Deleted ' + r.deleted + ' learning pictures (' + r.mb + ' MB).' : (r.error || 'That did not work.');
+  croplearnShow();
+};
+function resetButton(id, msg, url, show) {
+  let armed = 0;
+  $(id).onclick = async () => {
+    if (!armed || Date.now() - armed > 5000) {
+      armed = Date.now(); $(id).textContent = 'Click again to reset';
+      setTimeout(() => { if (armed && Date.now() - armed >= 5000) { armed = 0; $(id).textContent = 'Reset to default'; } }, 5100);
+      return;
+    }
+    armed = 0; $(id).textContent = 'Reset to default';
+    const r = await api(url, {action: 'reset'});
+    await show();
+    $(msg).textContent = r.ok ? r.text : (r.error || 'That did not work.');
+  };
+}
+resetButton('b-croplearnreset', 'croplearnresetmsg', '/api/croplearn', croplearnShow);
+resetButton('b-turnlearnreset', 'turnlearnresetmsg', '/api/turnlearn', turnlearnShow);
 $('b-croplearnreport').onclick = () => {
   const box = $('croplearnreport'); box.hidden = !box.hidden;
   $('b-croplearnreport').setAttribute('aria-expanded', String(!box.hidden));
   croplearnShow();
 };
-// the Settings window (⚙ in the top bar, or ⌘,): what used to be the last two cards on the left
-function openSettings() { if (!$('setdlg').open) { $('setdlg').showModal(); croplearnShow(); } }
-$('b-settings').onclick = openSettings;
+// The Settings window (⚙ in the top bar, or ⌘,) has tabs along the top and shows one at a time. A tab is a
+// <section class="settab" data-tab="Name"> in index.html; inside it every heading (.sub) with what follows
+// is a group. A group opens with a short line that is always shown (p.what); the longer explanations
+// are folded away behind the group's "?". The set-once cards of the left column (Save as, File names)
+// are moved into the tab that has a <div data-card="their id">.
+// Names from before the tabs still open the right place (page checks and other pages use them).
+const SET_ALIASES = {'Thumbnail & preview': 'Thumbnail', 'Preview scan': 'Preview', 'Messages when a strip is done': 'Notifications',
+  'Auto crop learning': 'Learning from your crops', 'Auto rotate learning': 'Learning from your turns', 'Logs and cache': 'Logs'};
+function buildSettings() {
+  const dlg = $('setdlg');
+  const nav = document.createElement('div'); nav.id = 'setnav'; nav.setAttribute('role', 'tablist'); nav.setAttribute('aria-label', 'Settings');
+  const pane = document.createElement('div'); pane.id = 'setpane';
+  const body = document.createElement('div'); body.id = 'setbody'; body.append(nav, pane);
+  [...dlg.querySelectorAll('section.settab')].forEach((tab, n) => {
+    tab.dataset.name = tab.dataset.tab; tab.id = 'settab' + n; tab.setAttribute('role', 'tabpanel');
+    for (const slot of [...tab.querySelectorAll('[data-card]')]) { const card = $(slot.dataset.card); if (card) { card.open = true; slot.replaceWith(card); } else slot.remove(); }
+    for (const sub of [...tab.children].filter(e => e.classList.contains('sub'))) {
+      const grp = document.createElement('div'); grp.className = 'setgrp'; grp.dataset.name = sub.textContent.trim();
+      const rest = []; for (let x = sub.nextSibling; x && !(x.nodeType === 1 && x.classList.contains('sub')); x = x.nextSibling) rest.push(x);
+      sub.before(grp); grp.append(sub, ...rest);
+      if (grp.querySelector('p.help, p.hint:not([id]), ul.how')) {
+        const q = document.createElement('button'); q.type = 'button'; q.className = 'q'; q.textContent = '?';
+        q.setAttribute('aria-label', 'Explain ' + grp.dataset.name); q.title = 'Explain'; q.setAttribute('aria-expanded', 'false');
+        q.onclick = () => q.setAttribute('aria-expanded', String(grp.classList.toggle('showhelp'))); sub.appendChild(q);
+      }
+    }
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = tab.dataset.name; b.setAttribute('role', 'tab'); b.setAttribute('aria-controls', tab.id);
+    b.onclick = () => showSetSec(tab.dataset.name);
+    b.onkeydown = ev => { const d = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0; if (!d) return;
+      const all = [...nav.children], to = all[(all.indexOf(b) + d + all.length) % all.length]; ev.preventDefault(); to.click(); to.focus(); };
+    nav.appendChild(b); pane.appendChild(tab);
+  });
+  dlg.appendChild(body);
+}
+// name: a tab, or a group inside one (then its tab is shown and the group scrolled to)
+function showSetSec(name) {
+  const tabs = [...document.querySelectorAll('#setpane .settab')]; if (!tabs.length) return;
+  name = SET_ALIASES[name] || name;
+  let tab = tabs.find(t => t.dataset.name === name), grp = null;
+  if (!tab) { grp = [...document.querySelectorAll('#setpane .setgrp')].find(g => g.dataset.name === name); tab = grp ? grp.closest('.settab') : tabs[0]; }
+  tabs.forEach(t => { t.hidden = t !== tab; });
+  [...$('setnav').children].forEach(b => { const on = b.textContent === tab.dataset.name; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+  $('setpane').scrollTop = grp ? Math.max(0, grp.offsetTop - $('setpane').offsetTop - 8) : 0;
+  try { localStorage.setItem('coolscan.setsec', tab.dataset.name); } catch (e) { /* fine */ }
+}
+buildSettings();
+{ let last = ''; try { last = localStorage.getItem('coolscan.setsec') || ''; } catch (e) { /* fine */ } showSetSec(last); }
+function openSettings(name) { if (typeof name === 'string') showSetSec(name); if (!$('setdlg').open) { $('setdlg').showModal(); croplearnShow(); turnlearnShow(); } }
+$('b-settings').onclick = () => openSettings();
 $('b-setdone').onclick = () => $('setdlg').close();
+// /?settings=1: only the Settings window, for the other pages to show in a frame (the same window, not a copy)
+if (new URLSearchParams(location.search).has('settings')) {
+  document.body.classList.add('setonly');
+  $('setdlg').addEventListener('close', () => { try { parent.postMessage('coolscan-settings-closed', location.origin); } catch (e) { /* alone */ } });
+  const wait = setInterval(() => { if (S) { clearInterval(wait); openSettings(); } }, 100);
+}

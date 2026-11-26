@@ -114,6 +114,29 @@ t = [read_tiff_info(r1 / f)["taken"].strftime("%Y-%m-%d %H:%M:%S") for f in (A, 
 check("exact: one second apart, in name order", t == ["1985-12-24 18:30:00", "1985-12-24 18:30:01", "1985-12-24 18:30:02"], str(t))
 marks = json.loads((r1 / "Library.json").read_text())["pictures"][A]
 check("the first date is remembered", marks.get("taken_was") == "2004-03-05 10:00:00" and marks["date_note"] == "about Christmas 1985", str(marks))
+# the roll header's "Photo taken, whole roll": every picture, except those given a date of their own
+app.library_edit(K, [B], {"date": {"how": "exact", "value": "1990-05-01T08:00"}})
+roll_now = {p["file"]: p for p in app.library_roll(K)["pictures"]}
+check("a picture changed by itself has its own date", roll_now[B]["taken_own"] and not roll_now[A]["taken_own"] and roll_now[B]["taken"] == "1990-05-01 08:00:00")
+everything = [p["file"] for p in app.library_roll(K)["pictures"]]
+r = app.library_edit(K, everything, {"date": {"how": "exact", "value": "1988-02-06T12:00", "roll": True}})
+roll_now = {p["file"]: p for p in app.library_roll(K)["pictures"]}
+check("whole roll: every other picture gets the day, in order", r["left"] == 1 and roll_now[A]["taken"][:10] == "1988-02-06" and roll_now[C]["taken"][:10] == "1988-02-06"
+      and roll_now[A]["taken"] < roll_now[C]["taken"] and roll_now[B]["taken"] == "1990-05-01 08:00:00", str(r))
+check("whole roll: the date is in the file too", read_tiff_info(r1 / A)["taken"].strftime("%Y-%m-%d") == "1988-02-06")
+raw_only = [f for f in everything if f.startswith("RAW/")]
+if raw_only:
+    check("whole roll: a RAW file is not changed, its date is in the app's list", roll_now[raw_only[0]]["taken"][:10] == "1988-02-06"
+          and (read_tiff_info(r1 / raw_only[0]).get("taken") is None or read_tiff_info(r1 / raw_only[0])["taken"].strftime("%Y-%m-%d") != "1988-02-06"))
+r = app.library_edit(K, everything, {"date": {"how": "year", "value": "1989", "roll": True, "all": True}})
+roll_now = {p["file"]: p for p in app.library_roll(K)["pictures"]}
+check("whole roll, own dates too: all change", r["left"] == 0 and all(p["taken"][:4] == "1989" for p in roll_now.values()) and not roll_now[B]["taken_own"], str({k: v["taken"] for k, v in roll_now.items()}))
+app.library_edit(K, [C, A, B], {"date": {"how": "exact", "value": "1985-12-24T18:30"}})
+two = [p["file"] for p in app.library_roll("Roll 002")["pictures"]]
+r = app.library_edit("Roll 002", two, {"date": {"how": "exact", "value": "1991-08-21T12:00", "roll": True}})
+now2 = {p["file"]: p["taken"] for p in app.library_roll("Roll 002")["pictures"]}
+check("whole roll: a RAW-only frame keeps its file, the date is in the app's list", len(r["problems"]) == 1 and now2["RAW/20261102_002_R002.tif"] == "1991-08-21 12:00:01"
+      and read_tiff_info(base / "Roll 002" / "RAW" / "20261102_002_R002.tif")["taken"].year == 1999, str(r) + str(now2))
 check("a wrong date is refused", not app.library_edit(K, [A], {"date": {"how": "year", "value": "abc"}})["ok"])
 check("stars and people still there after date changes", "<xmp:Rating>4</xmp:Rating>" in tiffmeta.read_xmp(r1 / A))
 check("pixels still exactly as they were", all(np.array_equal(a, b) for a, b in zip(read_tiff16(r1 / B), p2)))
@@ -173,10 +196,10 @@ app.library_export(K, [B])
 ti = read_tiff_info(r1 / "Edited" / B)
 check("turned export", (ti["cols"], ti["rows"]) == (300, 450))
 check("B unchanged", (r1 / B).read_bytes() == beforeB)
-app.library_edit(K, [C], {"redo": True, "edit": {"turns": 2}})
+app.library_edit(K, [C], {"rescan": True, "edit": {"turns": 2}})
 res = app.library_export(K, [C])
 check("export of a picture with no other marks", res["ok"] and res["saved"] == ["Edited/" + C], str(res))
-app.library_edit(K, [C], {"redo": False, "edit": None})
+app.library_edit(K, [C], {"rescan": False, "edit": None})
 pb = next(p for p in app.library_roll(K)["pictures"] if p["file"] == B)
 check("copies listed as versions of the picture", pb["versions"] == ["Edited/" + B], str(pb["versions"]))
 check("Edited is not a roll", "Edited" not in [r["name"] for r in app.library_rolls()["rolls"]])
@@ -212,6 +235,28 @@ plain = base / "Roll 009" / "g.tif"
 write_tiff(plain, [(rng.random((300, 450)) * 60000).astype(np.uint16) for _ in range(3)], 2900, icc_profile("ProPhoto RGB"))
 res = app.library_autocrop("Roll 009", ["g.tif"], save=True)
 check("nothing to cut: no crop", res["found"] == 0 and app._lib_edit_of(fr, "g.tif") is None, str(res))
+print("H2 export ticked pictures to a folder, keeping the roll folders")
+out = tmp / "Export"
+out.mkdir()
+app.library_crop(K, A, [0.1, 0.2, 0.6, 0.8])
+res = app.library_export_to(K, [A, C], str(out))
+check("export to a folder: roll folder kept", res["ok"] and res["saved"] == [f"{K}/{A}", f"{K}/{C}"] and not res["modified"], str(res))
+ei = read_tiff_info(out / K / A)
+check("with the crop put in", (ei["cols"], ei["rows"]) == (225, 180), str((ei["cols"], ei["rows"])))
+check("an unchanged picture copied as it is", (out / K / C).read_bytes() == (r1 / C).read_bytes())
+check("the picture itself unchanged", (r1 / A).read_bytes() == before)
+res = app.library_export_to("Roll 002", ["Positive/20261102_001_R002.tif"], str(out))
+check("a Positive picture lands in the roll's own folder", res["saved"] == ["Roll 002/20261102_001_R002.tif"], str(res))
+res = app.library_export_to(K, [A], str(out))
+check("exported again: never overwritten", res["saved"] == [f"{K}/20261101_001_R001 (2).tif"], str(res))
+res = app.library_export_to("Roll 002", ["Positive/20261102_001_R002.tif"], str(base))
+check("into the scans folder itself: _modified", res["modified"] and res["saved"] == ["Roll 002/20261102_001_R002_modified.tif"], str(res))
+res = app.library_export_to(K, [A], str(base))
+check("beside the picture itself: _modified, picture untouched", res["saved"] == [f"{K}/20261101_001_R001_modified.tif"]
+      and (r1 / A).read_bytes() == before, str(res))
+(r1 / "20261101_001_R001_modified.tif").unlink()
+check("no folder: refused", not app.library_export_to(K, [A], "")["ok"] and not app.library_export_to(K, [A], str(tmp / "nope"))["ok"])
+app.library_edit(K, [A], {"edit": None})
 check("RAW files are not cropped here", not app.library_crop("Roll 002", "RAW/20261102_001_R002.tif", [0.1, 0.1, 0.9, 0.9])["ok"])
 
 print("I re-develop from the RAW, Mac-only buttons")
@@ -220,34 +265,33 @@ check("the Re-develop page is set on the RAW file", res.get("ok") and app.dev["c
       and str(app.dev["folder"]).endswith("Roll 002/RAW"), str(res))
 check("no RAW: said so", not app.library_redevelop(K, A)["ok"])
 
-print("I2 tag pictures for re-development")
+print("I2 ticked pictures to the Re-develop page")
 P2 = "Positive/20261102_001_R002.tif"
 f2 = app._lib_base() / "Roll 002" / P2
 before = f2.read_bytes()
-res = app.library_edit("Roll 002", [P2], {"redo": True})
-check("tagging works", res["ok"] and res["changed"] == 1 and not res["problems"], str(res))
-check("the tag stays in the app's list, the file is not touched", f2.read_bytes() == before)
-check("the picture shows the tag", next(p for p in app.library_roll("Roll 002")["pictures"] if p["file"] == P2)["redo"])
-check("the folder list counts it", next(r for r in app.library_rolls()["rolls"] if r["key"] == "Roll 002")["redo"] == 1)
-app.library_edit(K, [A], {"redo": True})   # a picture without a RAW file can be tagged, but is listed without one
-rd = app.library_redo()
-r2 = next((r for r in rd["rolls"] if r["key"] == "Roll 002"), None)
-check("the Re-develop page's list", rd["ok"] and rd["total"] == 2 and r2 and r2["pictures"][0]["raw"] == "20261102_001_R002.tif"
-      and r2["raw_count"] == 1 and r2["path"].endswith("Roll 002/RAW"), str(rd))
-check("no RAW: listed without one", any(r["key"] == K and r["raw_count"] == 0 for r in rd["rolls"]), str(rd))
-app.library_edit(K, [A], {"redo": False})
-check("untagging works", all(r["key"] != K for r in app.library_redo()["rolls"]))
-app.develop_folder_now(path=r2["path"])
-app.develop_set({"how": {"clean": False}})
-app.develop_run(["20261102_001_R002.tif"])
-check("developing it takes the tag off", app.library_redo()["total"] == 0 and app.dev["results"].get("untagged") == 1,
-      str(app.dev["results"]))
-app.library_edit("Roll 002", [P2], {"redo": True})
-app.develop_set({"untag": False})
-app.develop_run(["20261102_001_R002.tif"])
-check("with untag off the tag stays", app.library_redo()["total"] == 1)
-app.develop_set({"untag": True})
-app.library_edit("Roll 002", [P2], {"redo": False})
+check("no RAW: refused", not app.library_send_to_develop(K, [A])["ok"])
+res = app.library_send_to_develop("Roll 002", [P2])
+check("handed over", res["ok"] and res["raw_count"] == 1, str(res))
+rd = app.library_redo(take=True)
+r2 = rd["rolls"][0] if rd["rolls"] else None
+check("the Re-develop page gets it once", r2 and r2["pictures"][0]["raw"] == "20261102_001_R002.tif" and r2["path"].endswith("Roll 002/RAW")
+      and app.library_redo()["total"] == 0, str(rd))
+check("the file is not touched", f2.read_bytes() == before)
+r002 = app._lib_base() / "Roll 002"
+mk = app._lib_marks(r002); mk["pictures"][P2] = {"redo": True, "rescan": True}; app._lib_save_marks(r002, mk)
+check("old re-develop tags are dropped", "redo" not in app._lib_marks(r002)["pictures"][P2])
+app.library_edit("Roll 002", [P2], {"rescan": False})
+
+print("I3 tag pictures to scan again")
+res = app.library_edit("Roll 002", [P2], {"rescan": True})
+check("rescan tag kept in the app's list, file untouched", res["ok"] and not res["problems"] and f2.read_bytes() == before, str(res))
+check("the picture and the folder list show it", next(p for p in app.library_roll("Roll 002")["pictures"] if p["file"] == P2)["rescan"]
+      and next(r for r in app.library_rolls()["rolls"] if r["key"] == "Roll 002")["rescan"] == 1)
+rs = app.library_rescan()
+check("the Rescan list: by roll, with the frame number", rs["ok"] and rs["total"] == 1 and rs["rolls"][0]["key"] == "Roll 002"
+      and rs["rolls"][0]["pictures"][0]["frame"] == 1 and rs["rolls"][0]["pictures"][0]["name"] == "20261102_001_R002.tif", str(rs))
+app.library_edit("Roll 002", [P2], {"rescan": False})
+check("untagging empties the list", app.library_rescan()["total"] == 0)
 if sys.platform != "darwin":
     check("Finder / Lightroom / JPEG say they need the Mac", not app.library_reveal(K, [A])["ok"]
           and not app.library_lightroom(K, [A])["ok"] and not app.library_jpeg(K, A, 2048)["ok"])
@@ -269,7 +313,7 @@ def post(path, body):
         return json.loads(r.read())
 
 
-check("page served", b"Coolscan library" in get("/library") and b"loadRolls" in get("/library.js"))
+check("page served", b"Scanned pictures" in get("/library") and b"loadRolls" in get("/library.js"))
 check("rolls route", len(json.loads(get("/api/library/rolls"))["rolls"]) == 5)
 qs = urllib.parse.urlencode({"key": K, "file": A})
 check("picture route", get("/library/small.png?" + qs)[:4] == b"\x89PNG")
@@ -284,6 +328,25 @@ try:
 except urllib.error.HTTPError as e:
     check("bad folder route refused", e.code == 404)
 server.shutdown()
+
+print("Z a roll scanned partly with Archive mode and partly without")
+r9 = base / "Roll 009 - mixed"
+picture(r9 / "20261109_001_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 0))
+picture(r9 / "20261109_002_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 1))
+picture(r9 / "RAW" / "20261109_002_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 1), note={"film": "negative"}, spp=4)
+picture(r9 / "Positive" / "20261109_003_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 2))
+picture(r9 / "RAW" / "20261109_003_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 2), note={"film": "negative"}, spp=4)
+picture(r9 / "20261109_003_R009.tif", datetime.datetime(2004, 7, 1, 9, 0, 2))
+roll = app.library_roll("Roll 009 - mixed")
+files = [p["file"] for p in roll["pictures"]]
+check("pictures in the folder and in Positive/ are both listed, each once",
+      files == ["20261109_001_R009.tif", "20261109_002_R009.tif", "Positive/20261109_003_R009.tif"], str(files))
+check("a picture in the folder itself is not shown as its RAW file",
+      not any(p.get("only_raw") for p in roll["pictures"]) and roll["pictures"][1]["raw"] == "RAW/20261109_002_R009.tif", str(roll["pictures"][1]))
+res = app.library_crop("Roll 009 - mixed", "20261109_002_R009.tif", [0.1, 0.1, 0.9, 0.9])
+check("and it can be cropped", res.get("ok"), str(res))
+r009 = next(r for r in app.library_rolls()["rolls"] if r["name"] == "Roll 009 - mixed")
+check("the roll counts each frame once", r009["count"] == 3, str(r009))
 
 print()
 print("FAILED: " + ", ".join(bad) if bad else "all library checks passed")

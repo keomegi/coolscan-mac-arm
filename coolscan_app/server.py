@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import app as app_module
 from .app import App
+from .scanner.demo import DEMO_MODEL_NAMES
 
 ABOUT = "Coolscan: a small Mac app for Nikon Coolscan film scanners. It opens in your web browser."
 WEB = Path(__file__).resolve().parent / "web"   # the page; read from disk each time, so a browser reload shows an edit
@@ -24,19 +25,20 @@ PAGE_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/style.css": ("s
               "/develop": ("develop.html", "text/html; charset=utf-8"),
               "/develop.js": ("develop.js", "text/javascript; charset=utf-8"),
               "/library": ("library.html", "text/html; charset=utf-8"),
-              "/library.js": ("library.js", "text/javascript; charset=utf-8")}
-def choose_folder(start):
+              "/library.js": ("library.js", "text/javascript; charset=utf-8"),
+              "/export.js": ("export.js", "text/javascript; charset=utf-8")}
+def choose_folder(start, prompt="Save scans in:"):
     """The Mac's own folder picker (Finder's "Choose a folder"). {"ok", "path"} or {"ok": False, ...}."""
     import subprocess
     if sys.platform != "darwin":
         return {"ok": False, "error": "The folder picker is only there on a Mac. Type the folder instead."}
     start = os.path.expanduser(start or "~")
     script = ['-e', 'on run argv', '-e', 'try', '-e',
-              'set f to choose folder with prompt "Save scans in:" default location (POSIX file (item 1 of argv))',
-              '-e', 'on error', '-e', 'set f to choose folder with prompt "Save scans in:"', '-e', 'end try',
+              'set f to choose folder with prompt (item 2 of argv) default location (POSIX file (item 1 of argv))',
+              '-e', 'on error', '-e', 'set f to choose folder with prompt (item 2 of argv)', '-e', 'end try',
               '-e', 'return POSIX path of f', '-e', 'end run']
     try:
-        r = subprocess.run(["osascript", *script, start if os.path.isdir(start) else os.path.expanduser("~")],
+        r = subprocess.run(["osascript", *script, start if os.path.isdir(start) else os.path.expanduser("~"), str(prompt)[:80]],
                            capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"ok": False, "error": f"The folder picker did not open ({e})."}
@@ -111,7 +113,9 @@ def make_handler(app):
                     if path == "/api/library/tags":
                         return self._send(app.library_tags())
                     if path == "/api/library/redo":
-                        return self._send(app.library_redo())
+                        return self._send(app.library_redo(take=q.get("take") == "1"))
+                    if path == "/api/library/rescan":
+                        return self._send(app.library_rescan())
                     if path == "/api/library/info":
                         return self._send(app.library_info(q.get("key", ""), q.get("file", "")))
                     if path in ("/library/small.png", "/library/big.png"):
@@ -122,6 +126,8 @@ def make_handler(app):
                 return self._send({"error": "not found"}, code=404)
             if path == "/api/croplearn":   # the learning auto crop: what it learned, how well, what it took
                 return self._send(app.croplearn_report())
+            if path == "/api/turnlearn":   # the learning auto rotate: the same
+                return self._send(app.turnlearn_report())
             if path == "/api/state":
                 return self._send(app.state())
             if path == "/api/shortcuts":
@@ -177,12 +183,39 @@ def make_handler(app):
                 try:
                     if path == "/api/library/describe":
                         return self._send(app.library_describe(key, body.get("text", "")))
+                    if path == "/api/library/film_colour":
+                        return self._send(app.library_film_colour(key, body.get("mode"), body.get("name") or ""))
+                    if path == "/api/library/film_base":
+                        return self._send(app.library_film_base(key, rel, body.get("x"), body.get("y")))
+                    if path == "/api/library/to_develop":
+                        return self._send(app.library_send_to_develop(key, body.get("files") or []))
                     if path == "/api/library/crop":
                         return self._send(app.library_crop(key, rel, body.get("rect")))
                     if path == "/api/library/edit":
                         return self._send(app.library_edit(key, body.get("files") or [rel], body))
                     if path == "/api/library/autocrop":
                         return self._send(app.library_autocrop(key, body.get("files") or [rel], bool(body.get("save"))))
+                    if path.startswith("/api/library/export_"):   # the Export dialog (exporting.py)
+                        what, opts, items = path.rsplit("/", 1)[1], body.get("options"), body.get("items")
+                        files = body.get("files") or ([rel] if rel else [])
+                        if body.get("scope"):   # whole rolls
+                            items = app.library_export_scope(body.get("scope"))
+                        if what == "export_options":
+                            return self._send(app.library_export_options())
+                        if what == "export_names":
+                            return self._send(app.library_export_names(key, files, opts, items))
+                        if what == "export_start":
+                            return self._send(app.library_export_start(key, files, opts, items))
+                        if what == "export_again":
+                            return self._send(app.library_export_again(key, files, items))
+                        if what == "export_status":
+                            return self._send(app.library_export_status())
+                        if what == "export_cancel":
+                            return self._send(app.library_export_cancel())
+                        if what == "export_preset":
+                            return self._send(app.library_export_preset(body.get("action"), body.get("name"), opts))
+                    if path == "/api/library/export_to":
+                        return self._send(app.library_export_to(key, body.get("files") or [rel], body.get("dest")))
                     if path == "/api/library/export":
                         return self._send(app.library_export(key, body.get("files") or [rel]))
                     if path == "/api/library/turn":
@@ -219,6 +252,11 @@ def make_handler(app):
                 if path == "/api/develop/set":
                     return self._send(app.develop_set(body))
                 return self._send({"error": "not found"}, code=404)
+            if path == "/api/scan" and not body.get("again_ok") and not app.job:
+                # frames scanned on this strip already, and nothing changed since: ask before doing it again
+                same = app.scanned_same(frames)
+                if same:
+                    return self._send({"ok": False, "confirm_again": same})
             if path == "/api/scan" and not body.get("overwrite_ok") and not app.job:
                 # a typed Next number with "Allow overwriting" on: say which pictures would be lost, and wait for a yes
                 count = len(frames) or (len(app.discovery.frames) if app.discovery is not None else 0)
@@ -226,6 +264,8 @@ def make_handler(app):
                 if over:
                     return self._send({"ok": False, "confirm_overwrite": over, "folder": app._short_path(app.roll_dir())})
             if path == "/api/choose_folder":
+                if body.get("for") == "export":   # the Library's "Export to folder"
+                    return self._send(choose_folder(body.get("start") or "~", "Export the pictures to:"))
                 return self._send(choose_folder(app.settings["outdir"]))
             if path in jobs:
                 name, fn = jobs[path]
@@ -256,16 +296,51 @@ def make_handler(app):
             if path == "/api/nudge":   # {frame, steps} moves a frame's window along the strip; {frame, reset: true} puts it back
                 if app.job:
                     return self._send({"ok": False, "busy": True})
+                if body.get("strip"):   # {strip: true, steps} moves every frame together; {strip: true, reset: true}
+                    return self._send(app.nudge_strip(int(body.get("steps") or 0), bool(body.get("reset"))))
                 return self._send(app.nudge_frame(int(body.get("frame", -1)), int(body.get("steps") or 0),
                                                   bool(body.get("reset"))))
+            if path == "/api/queue":   # {action: remove | add | earlier, frame} or {action: add | remove, frames} while a strip is scanned
+                action = str(body.get("action") or "")
+                if "frames" not in body:
+                    return self._send(app.queue_change(action, int(body.get("frame", -1))))
+                if action == "add":       # the ticked frames, from the button above the frames
+                    same = [] if body.get("again_ok") else app.scanned_same(frames)
+                    if same:
+                        return self._send({"ok": False, "confirm_again": same})
+                    return self._send(app.queue_add_many(frames))
+                if action == "remove":
+                    return self._send(app.queue_remove_many(frames))
+                return self._send({"ok": False, "error": "Unknown change."})
             if path == "/api/framesettings":   # {frames, changes: {key: value or null}} or {frames, reset: true}
                 return self._send(app.set_frame_settings(body.get("frames") or [], body.get("changes") or {},
                                                          bool(body.get("reset"))))
             if path == "/api/autocrop":
-                return self._send(app.auto_crop(int(body.get("frame", -1))))
+                return self._send(app.auto_crop(int(body.get("frame", -1)), save=body.get("save") is not False))
+            if path == "/api/turnlearn":   # {"action": "learn" | "guess" (key, file) | "library" (key, files)}
+                a = body.get("action")
+                if a == "learn":
+                    return self._send(app.turnlearn_learn("button"))
+                if a == "guess":
+                    return self._send(app.turnlearn_library_guess(str(body.get("key") or ""), str(body.get("file") or "")))
+                if a == "library":
+                    return self._send(app.turnlearn_library_auto(str(body.get("key") or ""), body.get("files") or []))
+                if a == "reset":   # Settings: back to the turn model that came with the app
+                    return self._send(app.turnlearn_reset())
+                if a == "library_all":   # Settings: every Library picture is the right way up, learn from them all
+                    return self._send(app.turnlearn_library_all())
+                if a in ("strip_accept", "strip_reject"):   # the strip bar: upside down or not, kept or the other way
+                    return self._send(app.turnlearn_strip_verdict(a == "strip_accept"))
+                if a in ("accept", "reject"):   # the frame card's Accept / Reject of a turn auto rotate made
+                    return self._send(app.turnlearn_verdict([int(f) for f in body.get("frames") or []], a == "accept"))
+                return self._send({"ok": False, "error": "unknown action"})
             if path == "/api/croplearn":   # {"action": "learn"}: learn from the crops kept so far
                 if body.get("action") == "learn":
                     return self._send(app.croplearn_learn("button"))
+                if body.get("action") == "reset":   # Settings: back to the crop model that came with the app
+                    return self._send(app.croplearn_reset())
+                if body.get("action") == "delete_pictures":   # crop and turn learning's small copies
+                    return self._send(app.learning_delete_pictures())
                 return self._send({"ok": False, "error": "unknown action"})
             if app.testing and path in ("/api/preset", "/api/film_profile", "/api/unlock"):
                 return self._send({"ok": False, "busy": True,
@@ -282,6 +357,8 @@ def make_handler(app):
                 with app.lock:
                     app.version += 1
                 return self._send(result)
+            if path == "/api/film_warning":   # the bar that says a strip looks like another film than its roll
+                return self._send(app.film_warning_answer(body.get("action")))
             if path == "/api/film_profile":
                 action, name = body.get("action"), body.get("name")
                 if action == "save":  # measuring changes nothing that a running scan uses
@@ -294,9 +371,9 @@ def make_handler(app):
                 return self._send(app.quick_job("changing roll", lambda: app.switch_roll(body.get("name"))))
             if path == "/api/notifytest":
                 if app_module.notifier is None:
-                    app.say("messages are not installed: notify.py is not in the coolscan_app/extras folder")
+                    app.say("notifications are not installed: notify.py is not in the coolscan_app/extras folder")
                 elif not app.settings.get("notify_on"):
-                    app.say("messages are switched off: tick \"Send a message when a strip is done\" under Additional settings")
+                    app.say("notifications are switched off: tick \"Notify me when a strip is done\" in Settings, Notifications")
                 elif not app.notify("Test message. This is how you will hear that a strip is done."):
                     app.say("nothing to send to yet: tick the banner, name a shortcut or give an ntfy topic")
                 return self._send({"ok": True})
@@ -344,10 +421,13 @@ def make_handler(app):
                 if "focus_point" in body:
                     app.focus_lock = None  # like Nikon Scan: a new focus point means focus again
                     app.frame_focus = {}
-                if "frame_fit" in body and not app.job:
-                    app.frame_fit_setting_changed()
+                if "frame_auto" in body and not app.job:
+                    app.frame_fit_setting_changed(realign_changed=True)
                 if ("auto_crop" in body or "auto_crop_trim" in body or "auto_crop_sides" in body) and not app.job:
                     app.auto_crop_setting_changed()
+                if "rotate180" in body and not app.job:   # turned by hand: the strip's guess is set aside
+                    app.strip_turn = None
+                    app.turnlearn_strip_flipped()
                 if ("rotate180" in body or "invert_preview" in body or "tone" in body or "restore" in body
                         or "film" in body) and not app.job:
                     app.redraw()
@@ -363,6 +443,9 @@ def main():
     ap = argparse.ArgumentParser(description=ABOUT, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--demo", action="store_true", help="use a pretend scanner")
+    ap.add_argument("--demo-model", metavar="MODEL", choices=DEMO_MODEL_NAMES,
+                    help="with --demo: pretend to be another Coolscan (and holder): " + ", ".join(DEMO_MODEL_NAMES)
+                         + ". Without it the pretend scanner is an LS-40 with the strip adapter")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--test", action="store_true",
                     help="test mode: also serve the test page, where one frame is scanned with several sets of settings")
@@ -371,14 +454,19 @@ def main():
     args = ap.parse_args()
     if args.window:
         args.no_browser = True
+    if args.demo_model:
+        if not args.demo:
+            sys.exit("--demo-model goes with --demo")
+        os.environ["COOLSCAN_DEMO_MODEL"] = args.demo_model
     if not args.demo:
         if sys.version_info < (3, 13):
-            sys.exit("nkscan needs Python 3.13 or newer. Turn the environment on first:  source .venv/bin/activate")
+            sys.exit("nkscan needs Python 3.13 or newer. Run bash setup.sh in the Coolscan folder (it makes .venv with a "
+                     "new enough Python), or turn the environment on first:  source .venv/bin/activate")
         try:
             import nkscan  # noqa: F401
         except ImportError:
-            sys.exit("nkscan is missing. Turn the environment on (source .venv/bin/activate), "
-                     "or install it with:  pip install nkscan numpy")
+            sys.exit("nkscan (the scanner driver) is missing. Run bash setup.sh in the Coolscan folder, "
+                     "or try the screens without a scanner:  python3 coolscan.py --demo")
     if args.test and not test_mode_installed():
         print("Test mode is not installed here (it needs coolscan_app/extras/testmode.py, web/test.html and web/test.js). "
               "Starting the ordinary screen.")

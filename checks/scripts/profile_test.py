@@ -140,8 +140,12 @@ check("going back to the earlier roll brings its profile and its measurements ba
       app.settings["film_profile"] == "Kodak Gold 200" and app.state()["roll_measured"] >= 6)
 app.thumbnail(); app.preview([0]); shown = app.previews[0]
 r = app.delete_film_profile("Kodak Gold 200")
-check("deleting the profile in use goes back to each frame on its own, and draws the pictures again",
-      r["ok"] and app.settings["film_profile"] == "" and app.state()["film_profiles"] == [] and app.previews[0] != shown)
+kept = app._film_profile()
+check("deleting the profile in use: gone from the list, the roll keeps its numbers in FilmProfile.json",
+      r["ok"] and app.settings["film_profile"] == "" and app.state()["film_profiles"] == [] and kept is not None
+      and app.state()["roll_colour"]["name"] == "Kodak Gold 200" and any("keeps its numbers" in l for l in app.log[-3:]), str(kept))
+app.use_film_profile("")
+check("...and each frame on its own again draws the pictures again", app._film_profile() is None and app.previews[0] != shown)
 check("deleting one that is not there: said, nothing breaks", app.delete_film_profile("Nope")["ok"] is False)
 r = app.load_preset("Gold, full")
 check("saved settings that name a deleted profile load without it", r["ok"] and app.settings["film_profile"] == "")

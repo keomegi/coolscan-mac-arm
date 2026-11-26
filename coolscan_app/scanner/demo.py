@@ -7,6 +7,34 @@ import time
 import numpy as np
 
 
+# Other Coolscan models and holders for the pretend scanner (--demo-model, or COOLSCAN_DEMO_MODEL).
+# Without one it is the LS-40 with the SA-21 strip adapter, exactly as before. The numbers are what
+# each model's pages are expected to say; none of these came from a real unit of that model.
+DEMO_MODELS = {
+    "LS-50": dict(product="LS-50 ED", model="LS-50", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                  max_frames=6, thumbnail_dpi=(100, 400), max_samples=16),
+    "LS-50:SF-210": dict(product="LS-50 ED", model="LS-50", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                         max_frames=1, thumbnail_dpi=(0, 0), max_samples=16, framing="address", thumbnail=False,
+                         film_format=None, frames=1),
+    "LS-5000": dict(product="LS-5000 ED", model="LS-5000", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                    max_frames=6, thumbnail_dpi=(100, 400), max_samples=16, multi_line=True),
+    "LS-5000:SA-30": dict(product="LS-5000 ED", model="LS-5000", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                          max_frames=0, thumbnail_dpi=(100, 400), max_samples=16, multi_line=True, frames=36),
+    "LS-4000": dict(product="LS-4000 ED", model="LS-4000", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                    max_frames=0, thumbnail_dpi=(100, 400), max_samples=16, frames=40),
+    "LS-40:MA-20": dict(max_frames=1, framing="published", thumbnail=False, frames=1),
+    "LS-8000": dict(product="LS-8000 ED", model="LS-8000", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                    max_frames=0, thumbnail_dpi=(100, 400), max_samples=16, framing="thumbnail", film_format=None,
+                    film_formats=["645", "66", "67", "68", "69"], frames=3, frame_in=(2.74, 2.2)),
+    "LS-9000": dict(product="LS-9000 ED", model="LS-9000", optical_dpi=4000, x_dpi_range=(100, 4000), y_dpi_range=(100, 4000),
+                    max_frames=0, thumbnail_dpi=(100, 400), max_samples=16, framing="thumbnail", film_format="135",
+                    frames=12),
+}
+DEMO_MODEL_NAMES = sorted(DEMO_MODELS)
+# the long side of a 120 frame in inches, by format, for a pass that names one (as in models.py)
+_FORMAT_IN = {"645": 41.5 / 25.4, "66": 56 / 25.4, "67": 69.5 / 25.4, "68": 76 / 25.4, "69": 83 / 25.4}
+
+
 class _Demo:
     """A pretend scanner so the screens can be tried without hardware."""
 
@@ -23,13 +51,25 @@ class _Demo:
     class Result:
         pass
 
-    def __init__(self):
+    def __init__(self, model=None):
         self._caps = self.Caps()
+        self.frame_in = (1.42, 0.94)  # a frame's long and short side in inches (35 mm)
+        self.first_frames = 6
+        if model:
+            if model not in DEMO_MODELS:
+                raise ValueError(f"no pretend {model}: pick one of {', '.join(DEMO_MODEL_NAMES)}")
+            spec = dict(DEMO_MODELS[model])
+            self.first_frames = spec.pop("frames", 6)
+            self.frame_in = spec.pop("frame_in", self.frame_in)
+            spec.setdefault("product", "LS-40 ED")
+            spec["product"] += " (demo)"
+            for k, v in spec.items():
+                setattr(self._caps, k, v)
         self._busy = threading.Lock()  # like nkscan, the session is locked during a pass
         self.loaded = True
         self.focus = 250
         self.medium_changes = 0  # like nkscan: counts a strip or holder going in or out
-        self.strip_frames = 6    # how many frames the strip in the scanner has
+        self.strip_frames = self.first_frames  # how many frames the strip in the scanner has
         self.focus_moves = 0     # how often a pass asked for the lens to be moved
         self.borders = bool(os.environ.get("COOLSCAN_DEMO_BORDERS"))  # True: the film's edges show as dark bands and the gaps as clear film (for Auto crop)
 
@@ -70,7 +110,8 @@ class _Demo:
     def load(self):
         if not self.loaded:
             self.medium_changes += 1
-            self.strip_frames = 4 if self.strip_frames == 6 else 6  # the next strip is another length
+            if self.first_frames > 1:  # the next strip is another length (a slide is a slide)
+                self.strip_frames = self.first_frames - 2 if self.strip_frames == self.first_frames else self.first_frames
         self.loaded = True
         return True
 
@@ -84,7 +125,12 @@ class _Demo:
         with self._busy:
             self._wait(progress, "thumbnail", 25)
         d = self.Disc()
-        cols, rows = 6 * 140, 96
+        if not self._caps.thumbnail:  # a slide: no thumbnail pass, the frame is the whole gate
+            d.thumbnail, d.column_addresses, d.row_addresses = None, None, None
+            d.frames = [(i * 14000 + 600, 50, i * 14000 + 13400, 900) for i in range(self.strip_frames)]
+            d.base_density, d.thumbnail_complete = None, None
+            return d
+        cols, rows = max(6, self.strip_frames) * 140, 96
         d.thumbnail = self._film(rows, cols, 1)
         if self.borders:
             self._edges(d.thumbnail, None, 0.11)  # the thumbnail reaches past the frames: wider bands, so some shows in each frame
@@ -112,7 +158,7 @@ class _Demo:
 
     def scan_frame(self, frame, dpi=None, infrared=False, clean=False, exposures=None,
                    focus=None, progress=None, **kw):
-        dpi = dpi or 2900
+        dpi = dpi or self._caps.optical_dpi
         if isinstance(focus, int) and not isinstance(focus, bool):
             self.focus_moves += 1
             self.focus = focus
@@ -122,7 +168,10 @@ class _Demo:
         # highest X address down (nkscan's PYTHON.md)
         k = max(0, (int(frame[0]) - 600) // 14000)
         top, left, bottom, right = k * 14000 + 600, 50, k * 14000 + 13400, 900  # the whole frame
-        full_rows, full_cols = int(0.94 * dpi), int(1.42 * dpi)
+        long_in, short_in = self.frame_in
+        if kw.get("format") in _FORMAT_IN and self.frame_in[1] > 2:  # 120 film: the format sets the length
+            long_in = _FORMAT_IN[kw["format"]]
+        full_rows, full_cols = int(short_in * dpi), int(long_in * dpi)
         c0 = int(round((int(frame[0]) - top) / (bottom - top) * full_cols))
         c1 = int(round((int(frame[2]) - top) / (bottom - top) * full_cols))
         r0 = int(round((right - int(frame[3])) / (right - left) * full_rows))

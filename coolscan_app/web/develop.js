@@ -15,29 +15,13 @@ function dev() { return S.develop; }
 function curFrame() { const D = dev(); return (D.current && D.frames[D.current]) || {turns: 0, crop: null}; }
 function set(body) { return api('/api/develop/set', body).then(r => { if (r.busy) $('foldermsg').textContent = 'Wait for the files being developed to be done.'; }); }
 
-// ---------------------------------------------------------------- 0. pictures tagged in the Library
-let tagged = null;
-async function loadTagged() {
-  try { tagged = await (await fetch('/api/library/redo')).json(); } catch (e) { tagged = null; }
-  drawTagged();
-}
-function drawTagged() {
-  const rolls = (tagged && tagged.ok && tagged.rolls) || [], ul = $('taglist');
-  $('tagged').hidden = !rolls.length;
-  ul.innerHTML = '';
-  for (const r of rolls) {
-    const li = document.createElement('li'), n = r.pictures.length;
-    const name = document.createElement('span'); name.className = 'tn'; name.textContent = r.name; li.appendChild(name);
-    const files = document.createElement('span'); files.className = 'tf';
-    files.textContent = n + ' tagged: ' + r.pictures.map(p => p.name).join(', ');
-    files.title = r.pictures.map(p => p.name + (p.raw ? '' : ' (no RAW file)')).join('\n'); li.appendChild(files);
-    const b = document.createElement('button');
-    b.textContent = r.raw_count ? 'Open ' + (r.raw_count === n ? 'these' : r.raw_count + ' with RAW files') : 'No RAW files';
-    b.disabled = !r.raw_count || (S && S.dev_job === 're-develop');
-    if (!r.raw_count) b.title = 'Only Archive mode keeps the RAW file these need';
-    b.onclick = () => openTagged(r);
-    li.appendChild(b); ul.appendChild(li);
-  }
+// ---------------------------------------------------------------- 0. pictures sent from Scanned pictures
+// "Re-develop ticked…" in Scanned pictures: open their RAW folder with their RAW files ticked (once)
+async function takeHandoff() {
+  let h = null;
+  try { h = await (await fetch('/api/library/redo?take=1')).json(); } catch (e) { h = null; }
+  const r = h && h.ok && h.rolls && h.rolls[0];
+  if (r && r.raw_count) openTagged(r);
 }
 async function openTagged(r) {
   const res = await api('/api/develop/folder', {path: r.path});
@@ -47,11 +31,10 @@ async function openTagged(r) {
   ticked.clear(); for (const n of raws) ticked.add(n);
   shownFiles = '';
   const skipped = r.pictures.length - raws.length;
-  $('foldermsg').textContent = raws.length + ' tagged picture' + (raws.length > 1 ? 's' : '') + ' ticked.' + (skipped ? ' ' + skipped + ' tagged without a RAW file left out.' : '');
+  $('foldermsg').textContent = raws.length + ' picture' + (raws.length > 1 ? 's' : '') + ' from Scanned pictures ticked.' + (skipped ? ' ' + skipped + ' without a RAW file left out.' : '');
   if (raws.length) await set({current: raws[0]});
 }
-window.addEventListener('focus', loadTagged);
-loadTagged();
+takeHandoff();
 
 // ---------------------------------------------------------------- 1. files
 $('b-look').onclick = async () => {
@@ -112,13 +95,11 @@ function fillForm() {
   const kodachrome = D.how.film === 'kodachrome' || (!D.how.film && (D.files || []).some(f => f.film === 'kodachrome'));
   $('kchint').hidden = !(D.how.clean && kodachrome);
   $('extras').checked = D.extras;
-  $('untag').checked = D.untag !== false;
 }
 for (const k of ['film', 'film_profile', 'tone', 'colour_space', 'restore', 'grain', 'dust_method'])
   $('h-' + k).onchange = () => set({how: {[k]: ['restore', 'grain'].includes(k) ? +$('h-' + k).value : $('h-' + k).value}});
 $('h-clean').onchange = () => set({how: {clean: $('h-clean').checked}});
 $('extras').onchange = () => set({extras: $('extras').checked});
-$('untag').onchange = () => set({untag: $('untag').checked});
 
 // ---------------------------------------------------------------- 3. look
 $('views').addEventListener('click', ev => { const b = ev.target.closest('button'); if (b) set({view: b.dataset.view}); });
@@ -188,13 +169,11 @@ function drawResults() {
   const sig = JSON.stringify(res);
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig; box.innerHTML = '';
-  if (res && !res.running) loadTagged();   // a run ended: tags may have come off
   if (!res) return;
   const p = document.createElement('p'); p.className = 'hint';
   p.textContent = (res.running ? 'Saving into ' : 'Saved into ') + res.folder + ': ' + res.saved.length + ' file(s)'
     + (res.took ? ' in ' + res.took : '') + (res.failed.length ? '. Failed: ' + res.failed.join(', ') + ' (see the Activity list)' : '');
   box.appendChild(p);
-  if (res.untagged) { const u = document.createElement('p'); u.className = 'hint'; u.textContent = 'The ↻ Re-develop tag was taken off ' + res.untagged + ' picture' + (res.untagged > 1 ? 's' : '') + ' in the Library.'; box.appendChild(u); }
   if (res.saved.length) { const q = document.createElement('p'); q.className = 'hint'; q.textContent = res.saved.join(', '); box.appendChild(q); }
 }
 
@@ -229,3 +208,18 @@ async function poll() {
   finally { setTimeout(poll, 500); }
 }
 poll();
+
+// the Settings window is the scanning screen's own, shown here in a frame, so there is one of it and not a copy
+(function () {
+  const b = document.getElementById('b-settings'); if (!b) return;
+  let dlg = null;
+  function open() {
+    if (dlg && dlg.open) return;
+    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'setframe'; dlg.setAttribute('aria-label', 'Settings'); document.body.appendChild(dlg);
+      dlg.addEventListener('close', () => { dlg.textContent = ''; }); }
+    const f = document.createElement('iframe'); f.src = '/?settings=1'; f.title = 'Settings'; dlg.textContent = ''; dlg.appendChild(f); dlg.showModal();
+  }
+  b.onclick = open;
+  window.addEventListener('message', ev => { if (ev.origin === location.origin && ev.data === 'coolscan-settings-closed' && dlg && dlg.open) dlg.close(); });
+  document.addEventListener('keydown', ev => { if ((ev.metaKey || ev.ctrlKey) && ev.key === ',') { ev.preventDefault(); open(); } });
+})();

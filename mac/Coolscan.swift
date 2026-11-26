@@ -94,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let python = folder.appendingPathComponent(".venv/bin/python")
         guard FileManager.default.isExecutableFile(atPath: python.path) else {
             fail("Python was not found in \(folder.path)/.venv",
-                 detail: "Make the environment there first (python3 -m venv .venv, then pip install -r requirements.txt).")
+                 detail: "Make the environment there first: open Terminal in that folder and run bash setup.sh")
             return
         }
         openLog()

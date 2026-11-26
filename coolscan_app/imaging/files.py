@@ -10,6 +10,7 @@ import zlib
 import numpy as np
 
 
+THUMB_TAG = 65001     # a private TIFF tag in RAW files: the frame's piece of the thumbnail pass (see pack_thumb_pass)
 COOLSCAN_TAG = 65000  # a private TIFF tag: the app's note on how the scan was made, as JSON text
 
 
@@ -29,6 +30,32 @@ def encode_png(img):
             + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", cols, rows, 8, colour, 0, 0, 0))
             + _png_chunk(b"IDAT", zlib.compress(raw.tobytes(), 6))
             + _png_chunk(b"IEND", b""))
+
+
+def pack_thumb_pass(planes):
+    """A frame's piece of the thumbnail pass as bytes: "CSTH", rows, cols, planes (uint16 each), then the
+    planes as 16-bit numbers, one after the other."""
+    planes = [np.ascontiguousarray(np.clip(np.asarray(p, np.float64), 0, 65535).astype("<u2")) for p in planes]
+    rows, cols = planes[0].shape
+    return b"CSTH" + struct.pack("<HHH", rows, cols, len(planes)) + b"".join(p.tobytes() for p in planes)
+
+
+def unpack_thumb_pass(blob):
+    if not blob or blob[:4] != b"CSTH" or len(blob) < 10:
+        return None
+    rows, cols, n = struct.unpack("<HHH", blob[4:10])
+    if len(blob) < 10 + rows * cols * n * 2 or not rows * cols * n:
+        return None
+    a = np.frombuffer(blob, "<u2", rows * cols * n, 10).reshape(n, rows, cols)
+    return [a[k].copy() for k in range(n)]
+
+
+def read_thumb_pass(path):
+    """The thumbnail pass kept inside a RAW file (planes turned like the file), or None."""
+    try:
+        return read_tiff_info(path, thumb=True).get("thumb_pass")
+    except (OSError, ValueError, KeyError, struct.error):
+        return None
 
 
 def write_tiff(path, planes, dpi, icc=None, meta=None):
@@ -114,6 +141,12 @@ def write_tiff(path, planes, dpi, icc=None, meta=None):
         if text:
             off, count = put_tail(text)
             tags.append((tag, 2, count, off))
+    if meta.get("thumb_pass"):  # the frame as the thumbnail pass saw it, kept inside the file (auto rotate learns from it)
+        blob = pack_thumb_pass(meta["thumb_pass"])
+        tags.append((THUMB_TAG, 7, len(blob), ifd_off + len(tail)))
+        tail.extend(blob)
+        if len(tail) % 2:
+            tail.append(0)
     exif_entries = []
     for tag, value in exif:
         if isinstance(value, bytes):
@@ -197,7 +230,7 @@ def read_tiff16(path):
     return [np.ascontiguousarray(a[..., k]).astype(np.uint16) for k in range(spp)]
 
 
-def read_tiff_info(path):
+def read_tiff_info(path, thumb=False):
     """What a TIFF says about itself, without reading its pixels: size, channels, resolution, the
     embedded colour profile, the EXIF dates and film speed, and the app's own note (COOLSCAN_TAG).
 
@@ -260,6 +293,10 @@ def read_tiff_info(path):
                 info["coolscan"] = note if isinstance(note, dict) else {}
             except ValueError:
                 pass
+        if THUMB_TAG in tags:
+            info["has_thumb_pass"] = True
+            if thumb:
+                info["thumb_pass"] = unpack_thumb_pass(value(tags[THUMB_TAG]))
         if 34665 in tags:
             exif = ifd(value(tags[34665])[0])
             if 36867 in exif:

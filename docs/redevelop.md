@@ -26,14 +26,12 @@ the top of the ordinary screen, or go to http://127.0.0.1:8765/develop.
    and the no-dust-removal positive too, to compare. **Nothing is ever overwritten** — each run is
    a new folder, and a name that is somehow taken gets a number.
 
-**Tag pictures as you browse.** In the Library, tick pictures and press **↻ Tag for re-develop**,
-or press **↻ Re-develop** (key **R**) on the picture on show. Tagged pictures show "↻ re-develop",
-the folder list shows how many each roll has, and the Flag filter can show only them. The tag is
-kept in the folder's `Library.json` only (not written into the picture files). The Re-develop
-page then lists the tagged pictures by roll under **Tagged in the Library**: "Open these" opens
-that roll's RAW files with the tagged ones ticked, ready for "Develop N ticked files". Once a
-file is developed the tag comes off (untick "Take the Library's ↻ Re-develop tag off…" in step 4
-to keep it). A picture with no RAW file can be tagged but not developed again; the page says so.
+**From the Library.** Tick pictures of one roll and press **↻ Re-develop ticked…**: the Re-develop
+page opens that roll's RAW folder with their RAW files ticked, ready for "Develop N ticked files".
+A picture with no RAW file (only Archive mode keeps one) cannot be developed again; tag it
+**🎞 Rescan** instead (key **S** on the picture on show), and the **🎞 Rescan list** at the top of
+the Library lists those pictures by roll, with their frame numbers, to scan again. Both are kept in
+the folder's `Library.json` only, never in the picture files.
 
 What to know:
 

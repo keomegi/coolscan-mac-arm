@@ -64,3 +64,7 @@ logs/
 # Backups made before edits, and one-off scripts (kept local)
 previous/
 redevelop_*.py
+# The learning auto crop: what it learned (models/crop_model.json, crop_cnn.npz) IS committed; half-written files are not
+models/*.part
+models/*.part.npz
+models/.owner

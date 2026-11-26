@@ -16,12 +16,18 @@ const [port, shotDir] = process.argv.slice(2);
   await p.waitForTimeout(800);
   await p.$eval('#stage', e => e.scrollIntoView({ block: 'center' })); await p.waitForTimeout(200);   // the frame cards can push it below the window
   const big = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
-  const pt = (fx, fy) => [big.x + fx * big.w, big.y + fy * big.h];
-  const drag = async (from, to) => { await p.mouse.move(...from); await p.mouse.down(); await p.mouse.move(...to, { steps: 6 }); await p.mouse.up(); await p.waitForTimeout(700); };
+  const pt = (fx, fy) => [fx, fy];   // fractions of the picture; drag() turns them into points once Crop is open
+  // since 2026-11-25 a crop is changed while Crop is open and kept with Done (as on the Scanned pictures page)
+  const rectOf = () => p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  const drag = async (from, to) => { await p.click('#b-crop'); await p.waitForTimeout(400); const g = await rectOf(), at = f => [g.x + f[0] * g.w, g.y + f[1] * g.h];
+    await p.mouse.move(...at(from)); await p.mouse.down(); await p.mouse.move(...at(to), { steps: 6 }); await p.mouse.up(); await p.waitForTimeout(200);
+    await p.click('#b-cropdone'); await p.waitForTimeout(700); };
   const out = { start: round(await crop()) };
+  await p.click('#b-crop'); await p.waitForTimeout(400);
   out.cursors = await p.$$eval('#cropbox .h', hs => Object.fromEntries(hs.map(h => [h.dataset.h, getComputedStyle(h).cursor])));
   out.boxCursor = await p.$eval('#cropbox', e => getComputedStyle(e).cursor);
   out.hint = await p.textContent('#vsaved');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(300);
   await drag(pt(0.6, 0.4), pt(0.8, 0.45));            // right side
   out.right = round(await crop());
   await drag(pt(0.4, 0.2), pt(0.42, 0.1));            // top side
@@ -42,7 +48,8 @@ const [port, shotDir] = process.argv.slice(2);
   const big2 = await p.$eval('#big', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   const box2 = await p.$eval('#cropbox', e => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   const before = await crop();
-  await drag([box2.x + box2.w, box2.y + box2.h / 2], [box2.x + box2.w + big2.w * 0.1, box2.y + box2.h / 2]);
+  const fr = (x, y) => [(x - big2.x) / big2.w, (y - big2.y) / big2.h];
+  await drag(fr(box2.x + box2.w, box2.y + box2.h / 2), fr(box2.x + box2.w + big2.w * 0.1, box2.y + box2.h / 2));
   out.turned = { before: round(before), after: round(await crop()) };
   // while picking a focus point, a click on the crop picks the point and leaves the crop alone
   await p.click('#g-focus summary').catch(() => {});

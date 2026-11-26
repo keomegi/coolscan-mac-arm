@@ -12,15 +12,21 @@ def default_settings():
     """What the app starts with the first time."""
     return {
         "film": "negative", "format": "", "preview_dpi": 290,
-        "dpi": 2900, "samples": 1, "clean": True,
+        "dpi": 2900, "samples": 1, "superfine": False, "clean": True,
         "ir": False,  # no separate _IR.tif any more (the option is gone); infrared is still read for dust removal
         "multi_exposure": 0,
         "crop_scan": True,
         "auto_crop": False,  # crop each frame to its picture (film edges, holder, gap left out) as it is shown  # a cropped frame: the scanner reads only the crop (not in Archive mode)  # 0 = off; 2 or 4 = a second pass exposed that many times longer, merged in
         "auto_crop_trim": 0.0,   # Auto crop: cut this share of the frame further in on each side it cuts (0 to 0.03)
         "auto_crop_sides": "all",   # "all", or "ends": only the two ends along the strip (left and right)
+        "crop_learn_delete_after": False,  # delete the small greyscale copies once it has learned from them (Settings)
+        "show_rotate180": False,  # the Film card's "Turn every frame 180°" switch is shown (Settings); auto rotate decides it per strip
+        "auto_turn": True,  # auto rotate learns from turns made by hand; turns new frames when sure, else suggests (Settings)
+        "auto_turn_learn": True,  # Settings, Auto rotate: turns made by hand are kept and learned from (off: the models there are still used)
         "auto_crop_learn": True,  # auto crop learns from crops drawn by hand, and crops like them (Additional settings)
-        "frame_fit": False,  # move each frame's start and end onto the gaps between pictures in the thumbnail
+        "frame_fit": False,  # no longer used (old saved settings may still hold it); see frame_auto
+        "frame_auto": False,  # Settings: place frames from the gaps in the thumbnail (a frame put across a gap goes onto its own picture, edges onto the gaps)
+        "show_frame_offset": False,  # Settings: the Strip offset control and the per-frame arrows are shown on the main screen
         "focus_mode": "frame", "focus_point": None, "focus_position": 0,
         "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
         "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
@@ -29,6 +35,8 @@ def default_settings():
         "archive_default": True,  # Archive mode is switched on each time the app starts (Additional settings)
         "colour_space": "ProPhoto RGB", "tone": "flat", "defaults_version": 6,
         "stop_on_errors": False, "scan_log": True, "eject_after": False, "auto_thumbnail": True,
+        "auto_preview": False,  # after the thumbnail that runs by itself when film goes in, preview every frame too
+       
         "dust_method": "builtin", "grain": 0, "restore": 0,
         "preview_af": True, "preview_ae": True,  # Preview scan: autofocus / meter each frame (off = quicker, may be soft or off in exposure)
         "notify_on": False,  # messages when a strip is done (needs extras/notify.py); off = none of the ways below is used
@@ -47,9 +55,9 @@ def default_settings():
 
 
 # what a saved set of settings holds: how to scan and save, not where (folder, roll) or who to tell
-PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "multi_exposure", "clean", "dust_method", "grain", "restore",
+PRESET_KEYS = ("film", "format", "preview_dpi", "dpi", "samples", "superfine", "multi_exposure", "clean", "dust_method", "grain", "restore",
                "focus_mode", "exposure_mode", "white_balance", "invert_preview", "negatives", "archive", "crop_scan", "auto_crop",
-               "auto_crop_trim", "auto_crop_sides", "frame_fit",
+               "auto_crop_trim", "auto_crop_sides", "frame_auto",
                "colour_space", "tone", "basename", "name_date", "digits", "stop_on_errors", "eject_after",
                "scan_log", "auto_thumbnail", "film_profile")
 
@@ -84,6 +92,16 @@ class SettingsMixin:
                 self.settings[k] = values[k]
         if self.settings["film_profile"] not in self.settings["film_profiles"]:
             self.settings["film_profile"] = ""  # saved with a film profile that has been deleted since
+        if hasattr(self, "_sync_roll_colour"):
+            # the colour of negatives is kept with the roll (FilmProfile.json): a set that names a film
+            # profile puts it on the roll; one without leaves the roll's own choice as it is
+            if self.settings["film_profile"] and not getattr(self, "testing", False):
+                self.use_film_profile(self.settings["film_profile"])
+            else:
+                self._sync_roll_colour()
+        fit = getattr(self, "fit_dpis", None)
+        if fit:
+            fit()  # saved with another scanner: its resolutions move onto this one's
         self.save_settings()
         self.redraw()
         self.say(f'settings "{name}" loaded')

@@ -483,9 +483,9 @@ class DevelopMixin:
                     n = self.library_untag_redo(self._dev_roll_folder(), [x.rsplit(".", 1)[0] for x in done])
                     if n:
                         d["results"]["untagged"] = n
-                        self.say(f"re-develop: took the re-develop tag off {n} picture(s) in the Library")
+                        self.say(f"re-develop: took the re-develop tag off {n} picture(s) in Scanned pictures")
                 except (OSError, ValueError) as e:
-                    self.say(f"re-develop: could not take the Library's re-develop tags off ({e})")
+                    self.say(f"re-develop: could not take the re-develop tags off in Scanned pictures ({e})")
             self._dev_bump()
         self.say(f"re-develop finished: {len(wanted) - len(failed)} of {len(wanted)} file(s) saved in "
                  f"{self._short_path(out)}, in {clock(took)}")
