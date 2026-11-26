@@ -47,6 +47,8 @@ check("Reject: turned back, no longer marked, learned from more strongly", app.f
 check("a frame not turned by auto rotate: Accept / Reject do nothing", app.turnlearn_verdict([0], False)["frames"] == [] and app.frame_rot.get(0) == 1)
 
 print("B the strip in upside down: found first, for every frame")
+was_roll = (app.settings["use_roll"], app.settings["roll"])
+app.settings.update(use_roll=False, roll="")   # no roll: nothing remembered between strips (B2 is with a roll)
 fake.p = np.array([0.9, 0.03, 0.04, 0.03])     # each frame, once the strip is turned: the right way up
 fake.first, fake.n = np.array([0.05, 0.05, 0.85, 0.05]), n   # the strip as the scanner sends it: upside down
 app.thumbnail()
@@ -73,6 +75,38 @@ fake.first, fake.n = np.array([0.4, 0.1, 0.4, 0.1]), n
 app.settings["rotate180"] = True
 app.thumbnail()
 check("not sure: kept as the last strip was, no bar", app.settings["rotate180"] is True and app.state()["strip_turn"] is None)
+print("B2 the answer is kept for the roll: asked once, again only when a strip comes out the other way")
+DOWN, UP, UNSURE = np.array([0.05, 0.05, 0.85, 0.05]), np.array([0.85, 0.05, 0.05, 0.05]), np.array([0.4, 0.1, 0.4, 0.1])
+def strip(first, rot=None):
+    if rot is not None:
+        app.settings["rotate180"] = rot
+    fake.first, fake.n = first, n
+    app.thumbnail()
+    return app.state()["strip_turn"]
+app.settings.update(use_roll=True, roll="Roll A", strip_turn_rolls={})
+check("first strip of a roll, upside down: asked", (strip(DOWN, False) or {}).get("turned") is True)
+app.turnlearn_strip_verdict(True)
+check("Accept: kept for the roll", app.settings["strip_turn_rolls"] == {"Roll A": True}, str(app.settings["strip_turn_rolls"]))
+check("next strip the same way: turned 180°, not asked again", strip(DOWN) is None and app.settings["rotate180"] is True)
+check("...also when the last strip scanned was another way round", strip(DOWN, False) is None and app.settings["rotate180"] is True)
+check("a strip not clear: as said for the roll, not asked", strip(UNSURE, False) is None and app.settings["rotate180"] is True)
+st2 = strip(UP)
+check("a strip the other way round: asked again", st2 and st2["turned"] is False and st2.get("flipped") is True
+      and app.settings["rotate180"] is False, json.dumps(st2))
+app.turnlearn_strip_verdict(True)
+check("...Accept: the roll now goes that way", app.settings["strip_turn_rolls"] == {"Roll A": False} and strip(UP) is None)
+st2 = strip(DOWN)
+app.turnlearn_strip_verdict(False)
+check("Reject: turned back, and that is kept for the roll", st2 and app.settings["rotate180"] is False
+      and app.settings["strip_turn_rolls"] == {"Roll A": False})
+app.settings["roll"] = "Roll B"
+check("another roll: asked on its own", (strip(DOWN) or {}).get("turned") is True and "flipped" not in app.state()["strip_turn"])
+app.turnlearn_strip_verdict(True)
+check("...and each roll keeps its own answer", app.settings["strip_turn_rolls"] == {"Roll A": False, "Roll B": True})
+app.settings.update(use_roll=False, roll="")
+check("no roll chosen: nothing remembered, asked as before", (strip(DOWN, False) or {}).get("turned") is True)
+app.turnlearn_strip_verdict(True)
+app.settings.update(use_roll=was_roll[0], roll=was_roll[1], rotate180=True)
 app.settings["show_rotate180"] = False
 check("the Film card's switch is hidden unless asked for in Settings", app.state()["settings"]["show_rotate180"] is False)
 

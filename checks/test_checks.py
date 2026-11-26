@@ -26,6 +26,7 @@ CHECKS = {
     "multi_test.py": ("Multi-Exposure", None),
     "develop_test.py": ("re-develop from RAW files, the 4-way view", None),
     "export_test.py": ("the Export dialog: where, names, TIFF/PNG/DNG/JPEG/HEIC, sizes, metadata, presets, background job", None),
+    "camera_test.py": ("the roll's camera, a picture's aperture and shutter speed: in the files, exports, New roll", None),
     "library_test.py": ("library: folders, marks and dates written into files, search, copies, routes", None),
     "filmcolour_test.py": ("the roll's colour of negatives: FilmProfile.json, shown in the Library, film base, scanning", None),
     "crop_scan_test.py": ("scanning only the crop", None),

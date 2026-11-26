@@ -39,7 +39,7 @@ import numpy as np
 from .imaging import filmfix
 from .imaging.colour import COLOUR_SPACES, _decode_srgb, _encode, _space_matrix, convert_planes, icc_profile
 from .imaging.files import read_tiff16, read_tiff_info, write_tiff
-from .imaging.tiffmeta import NotOurs, make_xmp, update_tiff
+from .imaging.tiffmeta import NotOurs, camera_parts, make_xmp, scanner_parts, update_tiff
 from .library import CROPPED_FOLDER, _turn_rect, apply_edit, space_of
 
 EXPORT_FILE = ".coolscan-export.json"   # in the home folder: the presets and the options used last
@@ -524,6 +524,16 @@ class ExportMixin:
             xmp = {"caption": m.get("caption") or "", "tags": m.get("tags") or [],
                    "rating": -1 if m.get("flag") == "reject" else int(m.get("stars") or 0),
                    "date_note": m.get("date_note") or ""}
+            # the camera the film was in, with the aperture and shutter speed, as a camera writes them
+            camera = self._lib_camera(folder)
+            if camera:
+                stamped = scanner_parts(folder / rel)
+                was = (info.get("make") or "", info.get("model") or "")
+                xmp["scanner"] = stamped if any(stamped) else (was if was != camera_parts(camera) else ("", ""))
+                meta["make"], meta["model"] = camera_parts(camera)
+                xmp["camera"] = camera
+            xmp["fnumber"] = m.get("aperture") or None
+            xmp["exposure"] = m.get("shutter") or ""
             if level == "all":
                 xmp["people"] = m.get("people") or []
         elif level == "basic":

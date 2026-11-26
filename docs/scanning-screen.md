@@ -8,7 +8,7 @@ The bar at the top says what the scanner is doing and holds the main buttons: Th
 Preview and the blue **Scan** button, with Connect, Load and Eject kept quieter beside them
 because they are needed less often. Under them, like Nikon Scan's status line, a row of small labels
 shows the settings the next scan will use ("Next scan: Colour negative · 2900 dpi · dust removal:
-built in ..."), plus an orange "frame 3: own settings" when a frame has settings of its own.
+on, IR Clean ..."), plus an orange "frame 3: own settings" when a frame has settings of its own.
 While a strip is scanned it says "This scan, frame 3" and shows that frame's settings, its own
 ones in orange; a setting changed meanwhile is for the next scan and does not change the line.
 The next line shows the latest line of the **Activity**
@@ -195,13 +195,15 @@ buttons says what is set now.
   Kodachrome's cyan dye blocks infrared much as dust does (Nikon's own ICE on the LS-40 had the
   same limit), so the cleaner can paint over parts of the picture. You can tick it again for
   Kodachrome to try it; check the result closely. The methods:
-  - *Built in* (the default): the app's own cleaner, tuned on five real negatives until its
+  - *IR Clean* (the default; called *Built in* until 26 November 2026): the app's own cleaner,
+    named after the infrared (IR) picture it works from, tuned on five real negatives until its
     result lined up with Nikon Scan's Digital ICE on the same scans. It leaves a pixel exactly
     as scanned unless its infrared is clearly darker than the rest of the film (about one pixel
     in eight on those frames), gives light dirt its light back, and fills heavy dirt from the
     clean film around it. It adds no grain. It runs in the app right after the pass, about a
     second a frame.
-  - *Driver (older method)*: nkscan's own cleaner, which the app used before. It rebuilds about
+  - *nkscan* (called *Driver* until 26 November 2026): the cleaner of nkscan, the scanner
+    driver, which the app used before. The older method. It rebuilds about
     four pixels in ten, brightens clean film a little and adds grain of its own. Kept so you
     can compare, or go on with a roll you started with it. In Archive mode it needs a second
     pass.
@@ -228,7 +230,7 @@ buttons says what is set now.
   not take the longer exposure, or the second pass comes back another size, more than half a
   pixel off or does not fit the first, the frame is saved from the normal pass alone and the
   Activity list says why. It cannot be combined with multi-sample by averaging passes, and
-  with it on, dust removal is always done by the app ("Driver" can only clean one pass).
+  with it on, dust removal is always done by the app ("nkscan" can only clean one pass).
 
 - **Negatives as**: Positive (default, like Nikon Scan), Negative (raw) or Both.
 - **Archive mode** (the switch at the top of the window, on by default): saves two folders in the target folder. `RAW/` holds the untouched scan with
@@ -359,10 +361,10 @@ you choose otherwise under "Negatives as".
 
 [Back to the README](../README.md)
 
-## Auto rotate: Accept / Reject, and strips in upside down
+## Auto rotate: the mark on a frame, and the strip's frame direction
 
-- A frame auto rotate turned by itself has a purple border and a **↻ Auto rotated · ✓ Accept · ✕ Reject** mark on its card (and the same buttons under the big picture). Accept keeps the turn and learns from it as a right guess; Reject turns it back and learns from that more strongly.
-- Before guessing each frame, auto rotate looks at the whole strip: when most frames that are clearly the right way up or upside down come out upside down (normal for some films, not a mistake), every frame is turned 180° and a purple bar over the frames says 'Frame direction found' and asks you to confirm it with Accept / Reject (Reject turns the strip the other way and guesses each frame again). Not sure: the strip is kept as the last one was.
+- A frame auto rotate turned by itself has a purple border and a **↻ Auto rotated** mark on its card. It is not asked about: when a turn is wrong, turn the frame back with the turn buttons, and auto rotate learns from that more strongly.
+- Before guessing each frame, auto rotate looks at the whole strip: when most frames that are clearly the right way up or upside down come out upside down (normal for some films, not a mistake), every frame is turned 180° and a purple bar over the frames says 'Frame direction found' and asks whether the frames below look correct (Accept / Reject). The answer is kept for the roll, so later strips of the same roll are not asked about unless one comes out the other way round (Reject turns the strip the other way and guesses each frame again). Not sure: the strip is kept as the last one was.
 - The "Turn every frame 180°" switch is hidden from the Film card unless "Show “Turn every frame 180°” on the main screen" is ticked in Settings ⚙.
 - Auto rotate uses a ready-made model ([auto-turn.md](auto-turn.md)). On thumbnails it only suggests a turn (too few pixels to be sure); a preview scan it turns by itself when sure; and the scan itself is looked at once more just before its files are written, so the saved files are very likely the right way up even when the thumbnail was not.
 - A frame already scanned keeps the turn its files were saved with: auto rotate never turns its picture on screen again.

@@ -47,7 +47,8 @@ After an update, quit and start again. Neither way needs a new build or setup.
 ## What it does
 
 - **Thumbnail, preview, scan** of a strip or slide: one frame, some, or all.
-- **Dust and scratch removal** from the infrared pass. Off for silver B&W film and Kodachrome.
+- **Dust and scratch removal** from the infrared pass, by the app's own cleaner (IR Clean) or
+  nkscan's. Off for silver B&W film and Kodachrome.
 - **Negatives to positives**, per frame or with a film profile made from your own rolls.
 - **Archive mode** (on by default): an untouched `RAW/` scan plus the finished `Positive/` picture.
 - **Crop and turn**, by hand or automatic, and scanning only the cropped part.
@@ -102,3 +103,19 @@ The Activity list (the A key) says what happened, with the driver's own words in
 - [docs/other-models.md](docs/other-models.md): other Coolscan models, whole rolls in the SA-30
 - [docs/tested.md](docs/tested.md): what has been tried on the real scanner and what hasn't
 - [docs/developers.md](docs/developers.md): how the code is laid out, and the checks
+
+## Licence and credits
+
+MIT licence: see [LICENSE](LICENSE).
+
+- [nkscan](https://github.com/activexray/nkscan) (MIT / Apache-2.0) is the scanner driver. It is
+  installed by `setup.sh`, not included here. The dust cleaner's infrared calibration follows
+  the one in nkscan's `dust.rs`, which in turn follows
+  [openICE](https://github.com/a6o/openICE).
+- [Deep Image Orientation Detection](https://github.com/duartebarbosadev/deep-image-orientation-detection)
+  by Duarte Barbosa (MIT) is the ready-made model behind Auto rotate. The app downloads it on
+  first use; it is not included here.
+
+This project is not affiliated with or endorsed by Nikon. Nikon, Coolscan and Nikon Scan are
+trademarks of Nikon Corporation; Digital ICE is a trademark of its owner. No Nikon software is
+included.

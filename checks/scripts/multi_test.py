@@ -80,7 +80,7 @@ check("the frame is noted with the exposure of its normal pass (film profiles st
       all(v["exposures"]["red"] == 1200 for v in colour.values()), str([v["exposures"] for v in colour.values()][-1]))
 app.settings.update(dust_method="pass")
 calls.clear(); app.scan([3])
-check("Driver dust removal cannot clean two passes: the app's cleaner does it", [c["clean"] for c in calls] == [False, False])
+check("nkscan's dust removal cannot clean two passes: the app's cleaner does it", [c["clean"] for c in calls] == [False, False])
 app.settings.update(dust_method="builtin", clean=False, ir=False, multi_exposure=4)
 
 # is the result really better? compare with what the pretend scanner's film holds

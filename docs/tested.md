@@ -10,7 +10,7 @@
 - Multi-sample 2x and 4x and Multi-Exposure, on one colour negative film (2026-11-23): they work,
   with no visible gain over 1x on that film, where grain dominates.
 - The graphics chip (MLX) for grain reduction and colour conversion (2026-11-25).
-- The built-in dust cleaner was measured against Nikon's Digital ICE on real colour-negative
+- IR Clean, the app's own dust cleaner, was measured against Nikon's Digital ICE on real colour-negative
   frames from this scanner (per-pixel difference about 0.3%).
 
 **Not run on a real scanner:** any model other than the LS-40, and real failures (the error help

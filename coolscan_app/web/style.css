@@ -291,10 +291,10 @@ button.gear{font-size:17px;line-height:1;width:32px;height:30px;padding:0}
 .qbtn{border:0;background:transparent;color:inherit;font-size:13px;line-height:18px;padding:0 4px;min-height:0;border-radius:8px;cursor:pointer}
 .qbtn:hover{background:rgba(0,0,0,.12)}
 
-/* a turn auto rotate made by itself, waiting for Accept or Reject */
+/* a turn auto rotate made by itself: marked, not asked about */
 .tile.auto{border-color:#bf5af2}
 .tile.auto.cur{border-color:var(--acc);box-shadow:inset 0 0 0 2px #bf5af2}
-.tile .autoturn{position:absolute;right:6px;bottom:6px;display:flex;align-items:center;gap:4px;padding:3px 4px 3px 8px;border-radius:9px;background:rgba(28,28,30,.86);border:1px solid #bf5af2;font-size:11px}
+.tile .autoturn{position:absolute;right:6px;bottom:6px;display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:9px;background:rgba(28,28,30,.86);border:1px solid #bf5af2;font-size:11px}
 .tile .autoturn[hidden]{display:none}
 .tile .autoturn .atwords{color:#e0b3ff;font-weight:700}
 .tile .atbtn{font-size:11px;padding:1px 7px;border-radius:7px;border:0;cursor:pointer}

@@ -158,16 +158,42 @@ class TurnLearningMixin:
             else:
                 up += 1
         n = up + down
+        known = self._strip_roll_answer()   # what the person said for this roll before (None: nothing yet)
+        was = bool(self.settings.get("rotate180"))
         if not n or max(up, down) / n < 0.7:
-            return   # not sure: kept as the last strip was
-        want, was = down > up, bool(self.settings.get("rotate180"))
+            if known is not None and known != was:   # not sure: as the person said for this roll
+                self.settings["rotate180"] = known
+                self.save_settings()
+            return   # not sure, and nothing said for the roll: kept as the last strip was
+        want = down > up
         self.settings["rotate180"] = want
         if want != was:
             self.save_settings()
             self.say("auto rotate: frame direction found: " + ("every frame is turned 180°" if want
                                                          else "frames are no longer turned 180°"))
+        if known is not None:
+            if want != known:   # the other way round than the person said for this roll: asked again
+                self.strip_turn = {"turned": want, "changed": True, "frames": n, "agree": max(up, down), "flipped": True}
+            return              # the same as before on this roll: not asked again
         if want or want != was:
             self.strip_turn = {"turned": want, "changed": want != was, "frames": n, "agree": max(up, down)}
+
+    def _strip_roll(self):
+        """The roll the strip's direction is remembered for (None: no roll chosen, nothing remembered)."""
+        return (self.settings.get("roll") or None) if self.settings.get("use_roll") else None
+
+    def _strip_roll_answer(self):
+        roll = self._strip_roll()
+        return (self.settings.get("strip_turn_rolls") or {}).get(roll) if roll else None
+
+    def strip_roll_keep(self):
+        """The person's word on this strip's direction (Accept, Reject, or the switch by hand): kept for the
+        roll, so later strips of it are not asked about unless they come out the other way round."""
+        roll = self._strip_roll()
+        if roll:
+            self.settings["strip_turn_rolls"] = {**(self.settings.get("strip_turn_rolls") or {}),
+                                                 roll: bool(self.settings.get("rotate180"))}
+            self.save_settings()
 
     def turnlearn_strip_verdict(self, accept):
         """The strip bar's Accept (keep it) or Reject (the other way round: every frame turned 180° the
@@ -181,8 +207,11 @@ class TurnLearningMixin:
             self.save_settings()
             self.say("strip turned the other way round: every frame " + ("turned 180°" if self.settings["rotate180"]
                                                                        else "as the scanner sends it"))
+            self.strip_roll_keep()
             self.turnlearn_strip_flipped()
             return {"ok": True}
+        if st is not None:
+            self.strip_roll_keep()
         with self.lock:
             self.version += 1
         return {"ok": True}

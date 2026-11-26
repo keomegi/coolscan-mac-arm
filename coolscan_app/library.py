@@ -37,7 +37,7 @@ from .imaging import filmfix
 from .imaging.autocrop import find_picture
 from .imaging.colour import COLOUR_SPACES, film_profile_from, frame_colour, shrink, to_srgb8
 from .imaging.files import encode_png, read_tiff16, read_tiff_info, write_tiff
-from .imaging.tiffmeta import NotOurs, update_tiff
+from .imaging.tiffmeta import NotOurs, camera_parts, read_aperture, read_scanner, read_shutter, update_tiff
 from .rolls import COLOUR_FILE, DESCRIPTION_FILE
 
 CROPPED_FOLDER = "Edited"          # cropped and turned copies
@@ -425,6 +425,7 @@ class LibraryMixin:
         if self.settings["use_roll"] and key and key == self.settings["roll"]:
             text = self.settings["film_description"] or text  # the scanning screen's copy is the newest
         return {"ok": True, "key": key, "name": name, "path": self._short_path(folder), "description": text,
+                "camera": self._lib_camera(folder, marks),
                 "pictures": pictures, "scan_log": (folder / "ScanLog.txt").is_file(), "film_colour": colour,
                 "current": bool(self.settings["use_roll"]) and key == self.settings["roll"]}
 
@@ -459,7 +460,7 @@ class LibraryMixin:
                "pixels": [cols, rows], "megapixels": round(cols * rows / 1e6, 1), "channels": info["channels"],
                "dpi": dpi, "profile": icc_name(info.get("icc") or b"") or None,
                "taken": info["taken"].strftime("%Y-%m-%d %H:%M") if info.get("taken") else None,
-               "iso": info.get("iso"), "scanner": self._lib_scanner(info),
+               "iso": info.get("iso"), "scanner": read_scanner(path) or self._lib_scanner(info),
                "description": info.get("description")}
         if dpi:
             out["film_mm"] = [round(cols / dpi * 25.4, 1), round(rows / dpi * 25.4, 1)]
@@ -487,6 +488,15 @@ class LibraryMixin:
         out["scan"] = {k: note[k] for k in ("film", "dpi", "exposures", "turns", "crop", "focus_position",
                                              "scanned", "roll", "from_roll_file") if k in note}
         out["raw"] = raw_rel
+        marks = self._lib_marks(folder)
+        mine = self._lib_marks_of(marks, rel)
+        out["camera"] = self._lib_camera(folder, marks) or None
+        if out["camera"] and out["scanner"] == camera_parts(out["camera"])[1] and raw_rel and raw_rel != rel:
+            try:   # a picture made from the RAW after the camera was set: the RAW file still names the scanner
+                out["scanner"] = self._lib_scanner(read_tiff_info(folder / raw_rel)) or out["scanner"]
+            except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error):
+                pass
+        out["aperture"], out["shutter"] = mine["aperture"], mine["shutter"]
         out["edit"] = self._lib_edit_of(folder, rel)
         fix, why = self._lib_fix(folder, path, rel)
         mode = (filmfix.read_roll(folder) or {}).get("mode", "frame")
@@ -740,7 +750,7 @@ class LibraryMixin:
                         try:   # a file with another program's metadata keeps it, and its own date
                             update_tiff(target, caption=m.get("caption") or "", tags=m.get("tags") or [],
                                         rating=-1 if m.get("flag") == "reject" else int(m.get("stars") or 0), taken=when,
-                                        people=m.get("people") or [], date_note=m.get("date_note") or "")
+                                        people=m.get("people") or [], date_note=m.get("date_note") or "", **self._lib_exposure_of(folder, m))
                         except (NotOurs, OSError, ValueError, struct.error):
                             pass
                 else:
@@ -757,7 +767,7 @@ class LibraryMixin:
                         rating = -1 if m.get("flag") == "reject" else int(m.get("stars") or 0)
                         update_tiff(target, caption=m.get("caption") or "", tags=m.get("tags") or [], rating=rating,
                                     taken=datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S") if t else None,
-                                    people=m.get("people") or [], date_note=m.get("date_note") or "")
+                                    people=m.get("people") or [], date_note=m.get("date_note") or "", **self._lib_exposure_of(folder, m))
                 saved.append(str(target.relative_to(dest)))
             except (OSError, ValueError, struct.error) as ex:
                 problems.append(f"{rel}: {getattr(ex, 'strerror', None) or ex}")
@@ -781,7 +791,7 @@ class LibraryMixin:
         path = folder / META_FILE
         for v in marks["pictures"].values():
             v.pop("redo", None)   # the old re-develop tag is gone
-        marks["pictures"] = {k: v for k, v in marks["pictures"].items() if any(v.get(x) for x in ("stars", "flag", "tags", "caption", "taken", "people", "date_note", "rescan", "edit", "colour"))}
+        marks["pictures"] = {k: v for k, v in marks["pictures"].items() if any(v.get(x) for x in ("stars", "flag", "tags", "caption", "taken", "people", "date_note", "rescan", "edit", "colour", "aperture", "shutter"))}
         tmp = folder / (META_FILE + ".part")
         tmp.write_text(json.dumps(marks, indent=1, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
@@ -792,7 +802,53 @@ class LibraryMixin:
         return {"stars": int(m.get("stars") or 0), "flag": m.get("flag") or None, "tags": list(m.get("tags") or []),
                 "people": list(m.get("people") or []), "caption": m.get("caption") or "", "date_note": m.get("date_note") or "",
                 "rescan": bool(m.get("rescan")), "edit": tidy_edit(m.get("edit")), "taken_own": bool(m.get("taken_own")),
-                "colour": m.get("colour") if m.get("colour") in ("own", "roll") else None}
+                "colour": m.get("colour") if m.get("colour") in ("own", "roll") else None,
+                "aperture": m.get("aperture") or None, "shutter": m.get("shutter") or ""}
+
+    def _lib_camera(self, folder, marks=None):
+        """The camera the folder's film was in: kept in its Library.json; for the roll being scanned into,
+        what the scanning screen has when the folder's list says nothing yet."""
+        if marks is None:
+            marks = self._lib_marks(folder)
+        camera = marks.get("camera")
+        if not isinstance(camera, str):
+            st = self.settings
+            camera = st.get("film_camera", "") if st["use_roll"] and st["roll"] and folder == self._base() / st["roll"] else ""
+        return camera.strip()
+
+    def _lib_exposure_of(self, folder, m, camera=None):
+        """What update_tiff / make_xmp get for the camera, aperture and shutter speed of a picture."""
+        return {"camera": self._lib_camera(folder) if camera is None else camera,
+                "fnumber": m.get("aperture") or None, "exposure": m.get("shutter") or ""}
+
+    def library_camera(self, key, text):
+        """Set the camera for a whole folder: kept in its Library.json and written into its pictures' tags
+        (Make and Model, so Lightroom shows it as the camera). RAW files are left as they are."""
+        folder = self._lib_folder(key)
+        camera = re.sub(r"\s+", " ", str(text or "")).strip()[:80]
+        files = [rel for rel, _ in self._lib_pictures(folder)[:PICTURES_MOST]]
+        problems, changed = [], 0
+        with self.lib_lock:
+            marks = self._lib_marks(folder)
+            marks["camera"] = camera
+            self._lib_save_marks(folder, marks)
+            for rel in files:
+                why = self._lib_write_file(folder, rel, marks["pictures"].get(rel) or {}, camera=camera)
+                if why:
+                    problems.append(f"{rel}: {why}")
+                else:
+                    changed += 1
+        st = self.settings
+        if st["use_roll"] and key and key == st["roll"]:
+            st["film_camera"] = camera
+        if isinstance(st["rolls"].get(key), dict):
+            st["rolls"][key]["film_camera"] = camera
+        self.save_settings()
+        self.say(f"library: camera {'set to ' + camera if camera else 'taken out'} for {folder.name if key else 'the scans folder'}"
+                 f" ({changed} file(s) written" + (f"; {len(problems)} kept in the app's list only" if problems else "") + ")")
+        with self.lock:
+            self.version += 1
+        return {"ok": True, "camera": camera, "changed": changed, "problems": problems}
 
     def _lib_edit_of(self, folder, rel):
         """The crop and turn kept for a picture, or None."""
@@ -826,7 +882,7 @@ class LibraryMixin:
             return str(m["taken"])
         return self._lib_taken(folder / rel)
 
-    def _lib_write_file(self, folder, rel, m, taken=None):
+    def _lib_write_file(self, folder, rel, m, taken=None, camera=None):
         """Put a picture's marks into the file itself (XMP + EXIF), so Lightroom sees them. '' if done, else why not."""
         if not WRITE_FILES:
             return ""
@@ -839,7 +895,8 @@ class LibraryMixin:
         rating = -1 if m.get("flag") == "reject" else int(m.get("stars") or 0)
         try:
             update_tiff(path, caption=m.get("caption") or "", tags=m.get("tags") or [], rating=rating, taken=taken,
-                        people=m.get("people") or [], date_note=m.get("date_note") or "")
+                        people=m.get("people") or [], date_note=m.get("date_note") or "",
+                        **self._lib_exposure_of(folder, m, camera))
         except NotOurs as e:
             return str(e)
         except (OSError, ValueError, struct.error) as e:
@@ -886,9 +943,19 @@ class LibraryMixin:
             except (OSError, ValueError):
                 own = len(files) == 1
         only_app = set(body) - {"key", "file", "files"} <= {"rescan", "edit", "colour"}   # nothing to write into the files then
+        exposure = {}
+        try:   # as typed: f/5.6, 5,6 ... and 1/125, 125, 2s ...
+            if "aperture" in body:
+                exposure["aperture"] = read_aperture(body["aperture"])
+            if "shutter" in body:
+                exposure["shutter"] = read_shutter(body["shutter"])
+        except ValueError as e:
+            return {"ok": False, "error": "That aperture is not one. Type it like 5.6 or f/5.6." if str(e) == "aperture"
+                    else "That shutter speed is not one. Type it like 1/125, or 2s for whole seconds."}
         with self.lib_lock:
             marks = self._lib_marks(folder)
             pics = marks["pictures"]
+            camera = self._lib_camera(folder, marks)
             for n, rel in enumerate(sorted(files)):
                 m = dict(pics.get(rel) or {})
                 if "stars" in body:
@@ -899,6 +966,7 @@ class LibraryMixin:
                     m["caption"] = str(body["caption"] or "").strip()[:2000]
                 if "date_note" in body:
                     m["date_note"] = str(body["date_note"] or "").strip()[:200]
+                m.update(exposure)   # aperture (5.6) and shutter speed ("1/125", or seconds: "2")
                 if "rescan" in body:   # tagged to be scanned again from the film (kept in the app's list only)
                     m["rescan"] = bool(body["rescan"])
                 if "colour" in body:   # this picture's own colour or the roll's: kept in the app's list only
@@ -928,7 +996,7 @@ class LibraryMixin:
                     m["taken"] = taken.strftime("%Y-%m-%d %H:%M:%S")
                     m["taken_own"] = own   # changed by itself or with a few others: its own date
                 pics[rel] = m
-                why = "" if only_app else self._lib_write_file(folder, rel, m, taken)
+                why = "" if only_app else self._lib_write_file(folder, rel, m, taken, camera)
                 if date:
                     m["taken_app"] = bool(why)   # the file could not take it: the app's list is where the date is
                 if why:
@@ -938,6 +1006,7 @@ class LibraryMixin:
         what = ", ".join(dict.fromkeys(w for w, k in (("stars", "stars"), ("flag", "flag"), ("caption", "caption"),
                                          ("tags", "add_tags"), ("tags", "remove_tags"), ("people", "add_people"),
                                          ("people", "remove_people"), ("date taken", "date"), ("date note", "date_note"),
+                                         ("aperture", "aperture"), ("shutter speed", "shutter"),
                                          ("rescan tag", "rescan"), ("crop and turn", "edit"),
                                          ("own or roll colour", "colour")) if k in body))
         self.say(f"library: {what or 'nothing'} changed for {changed} picture(s) in {folder.name if key else 'the scans folder'}"
@@ -957,7 +1026,7 @@ class LibraryMixin:
                 roll = self.library_roll(r["key"])
             except (OSError, ValueError):
                 continue
-            head = f"{roll['name']} {roll['description']}".lower()
+            head = f"{roll['name']} {roll['description']} {roll.get('camera') or ''}".lower()
             if all(w in head for w in words):
                 rolls.append({"key": r["key"], "name": r["name"], "count": len(roll["pictures"])})
             for p in roll["pictures"]:

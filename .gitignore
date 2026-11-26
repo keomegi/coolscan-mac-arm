@@ -44,8 +44,7 @@ node_modules/
 driver-log-copy.txt
 *.log
 
-# Nikon's copyrighted software (never commit)
-app_scan.iso
+# Installers, disc images and Windows binaries (never commit)
 *.iso
 *.dll
 *.DLL
@@ -68,3 +67,7 @@ redevelop_*.py
 models/*.part
 models/*.part.npz
 models/.owner
+
+# Loose local files (never commit)
+read_email.py
+patches/

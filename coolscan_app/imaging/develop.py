@@ -419,7 +419,7 @@ class DevelopMixin:
             parts.append(f'film profile "{how["film_profile"]}"' if how["film_profile"] else "colour of each frame on its own")
         parts.append("no dust removal (not possible on B&W film)" if film == "mono" else
                      ("dust removal by the Nikon ICE helper" if how["dust_method"] == "ice" and self.ice_ready
-                      else "built-in dust removal") if how["clean"] else "no dust removal")
+                      else "dust removal by IR Clean") if how["clean"] else "no dust removal")
         if how["restore"]:
             parts.append(f"colour restoration {how['restore']}")
         if how["grain"]:

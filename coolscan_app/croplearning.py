@@ -1,6 +1,6 @@
 """The learning auto crop, in the app: keeping the crops the person draws by hand, learning from them
 (and from the crops kept in the Library), and cropping with what was learned. The learning itself is
-in imaging/croplearn.py (and the picture network in imaging/cropcnn.py).
+in imaging/croplearn.py.
 
 Setting "auto_crop_learn" (Settings, Crop, on by default): off, no crops are kept and nothing is
 learned by itself; auto crop goes on using the model that is there (the one that came with the app,

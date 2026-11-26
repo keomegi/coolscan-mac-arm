@@ -110,6 +110,7 @@ async function openRoll(key, pic, keepTicks) {
   $('b-desc').disabled = true;
   drawFilmColour(r.film_colour);
   $('rdate').value = ''; drawRollDate(true);
+  $('rcamrow').hidden = false; $('rcam').value = savedCam = r.camera || ''; $('b-rcam').disabled = true; say('rcammsg', '');
   fillFilters(r.pictures);
   drawGrid(); markRoll(); remember();
   if (pic) { const i = items.findIndex(p => p.file === pic); if (i >= 0) show(i); }
@@ -133,7 +134,7 @@ async function runSearch(text, pic, key) {
   $('rpath').textContent = r.pictures.length + (r.more ? '+' : '') + ' picture' + (r.pictures.length === 1 ? '' : 's') + ' in every roll'
     + (r.rolls.length ? ' · rolls whose name or description match: ' + r.rolls.map(x => x.name).join(', ') : '');
   showDescription(false);
-  $('fcolrow').hidden = true;
+  $('fcolrow').hidden = true; $('rcamrow').hidden = true;
   drawRollDate();
   fillFilters(r.pictures);
   drawGrid(); markRoll(); remember();
@@ -190,6 +191,7 @@ function drawGrid() {
     const marks = [];
     if (roll.search) marks.push(p.roll);
     if (p.taken) marks.push(p.taken.slice(0, 10) + (p.date_note ? ' (' + p.date_note + ')' : ''));
+    if (p.aperture || p.shutter) marks.push([niceAperture(p.aperture), niceShutter(p.shutter)].filter(Boolean).join(' '));
     marks.push(mb(p.bytes));
     if (p.only_raw) marks.push('RAW only'); else if (p.raw) marks.push('RAW');
     if (p.versions.length) marks.push(p.versions.length + ' version' + (p.versions.length > 1 ? 's' : ''));
@@ -387,6 +389,25 @@ $('a-setdate').onclick = () => {
   if (!value) { say('actmsg', 'Type the ' + (how === 'year' ? 'year' : 'date') + ' first.', 'warn'); return; }
   edit(tickedPics(), {date: {how, value}});
 };
+// ---------------------------------------------------------------- the camera the roll's film was in
+let savedCam = '';
+$('rcam').addEventListener('input', () => { $('b-rcam').disabled = $('rcam').value.trim() === savedCam; });
+$('rcam').addEventListener('keydown', ev => { if (ev.key === 'Enter' && !$('b-rcam').disabled) $('b-rcam').click(); });
+$('b-rcam').onclick = async () => {
+  if (!roll || roll.search) return;
+  say('rcammsg', 'Saving…');
+  const r = await post('/api/library/camera', {key: roll.key, camera: $('rcam').value});
+  if (!r.ok) { say('rcammsg', r.error || 'Could not save.', 'warn'); return; }
+  roll.camera = $('rcam').value = savedCam = r.camera; $('b-rcam').disabled = true;
+  const viewing = !$('viewer').hidden, inApp = (r.problems || []).length;
+  await refresh();
+  if (viewing && items[at]) await show(at, alt);
+  say('rcammsg', (r.camera ? 'Camera saved' : 'Camera taken out') + ' for this roll, in the app and in ' + r.changed + ' file' + (r.changed === 1 ? '' : 's')
+    + (inApp ? '. For ' + inApp + ' it is kept in the app only (RAW files and files Lightroom has written into are not changed); exports get it all the same' : '') + '.', inApp ? 'warn' : 'ok');
+};
+// aperture and shutter speed as the page shows them
+function niceAperture(f) { return f ? 'ƒ/' + f : ''; }
+function niceShutter(s) { return s ? s + ' s' : ''; }
 // ---------------------------------------------------------------- when the whole roll was taken
 function niceDay(d) { const [y, m, n] = d.split('-').map(Number); return n + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] + ' ' + y; }
 function rollDatePics() { return roll && !roll.search ? roll.pictures.filter(p => !p.file.startsWith('RAW/') || p.only_raw) : []; }
@@ -656,6 +677,19 @@ function drawViewerMarks() {
   note.onchange = () => edit([p], {date_note: note.value}, 'cropmsg');
   r3.appendChild(note);
   box.appendChild(r3);
+  // how the photo was exposed: aperture and shutter speed (the camera belongs to the whole roll)
+  const r4 = el('div', 'erow exposure');
+  const al = el('label', 'hint'); al.appendChild(el('span', 'fsym', 'ƒ/')); al.title = 'Aperture (f-number), e.g. 5.6';
+  const ap = el('input'); ap.type = 'text'; ap.inputMode = 'decimal'; ap.placeholder = '5.6'; ap.value = p.aperture || ''; ap.style.width = '64px';
+  ap.setAttribute('aria-label', 'Aperture (f-number)');
+  ap.onchange = async () => { if (await edit([p], {aperture: ap.value}, 'cropmsg') && items[at]) { const said = $('cropmsg').textContent, kind = $('cropmsg').className; await show(at, alt); $('cropmsg').className = kind; $('cropmsg').textContent = said; } };
+  al.appendChild(ap); r4.appendChild(al);
+  const sl = el('label', 'hint', 'Shutter '); sl.title = 'Shutter speed: 1/125, or 125 as on the camera\'s dial; 2s for whole seconds';
+  const sh = el('input'); sh.type = 'text'; sh.placeholder = '1/125'; sh.value = p.shutter || ''; sh.style.width = '84px';
+  sh.setAttribute('aria-label', 'Shutter speed');
+  sh.onchange = async () => { if (await edit([p], {shutter: sh.value}, 'cropmsg') && items[at]) { const said = $('cropmsg').textContent, kind = $('cropmsg').className; await show(at, alt); $('cropmsg').className = kind; $('cropmsg').textContent = said; } };
+  sl.appendChild(sh); sl.appendChild(el('span', null, ' s')); r4.appendChild(sl);
+  box.appendChild(r4);
 }
 
 function row(dl, label, value) {
@@ -688,6 +722,9 @@ function drawInfo(r) {
   row(dl, 'Colour profile', r.profile);
   dl = section('Photo');
   row(dl, 'Photo taken', r.taken);
+  row(dl, 'Camera', r.camera);
+  row(dl, 'Aperture', niceAperture(r.aperture));
+  row(dl, 'Shutter speed', niceShutter(r.shutter));
   row(dl, 'Film speed', r.iso ? 'ISO ' + r.iso : null);
   row(dl, 'Scanner', r.scanner);
   row(dl, 'Note in file', r.description);

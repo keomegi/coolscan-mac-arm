@@ -15,6 +15,7 @@ from .driver import Cancelled, _lost_scanner, _stopped, _this_frame_only, clock,
 from ..imaging.dust import dust_clean
 from ..imaging.enhance import merge_exposures, pass_shift, reduce_grain, restore_colour
 from ..imaging.files import read_tiff_rgb16, write_tiff
+from ..imaging.tiffmeta import update_tiff
 
 
 #
@@ -58,6 +59,17 @@ class ScanMixin:
             except (ValueError, IndexError, OverflowError):
                 self.say(f"can't read the photo date {text!r}; use e.g. 2005 or 2005-06-14. Using today.")
         return meta
+
+    def _stamp_camera(self, path):
+        """The roll's camera into a finished picture just saved (Make and Model, as a camera writes them;
+        the scanner's name moves to the file's XMP). RAW files keep the scanner's."""
+        camera = (self.settings.get("film_camera") or "").strip()
+        if not camera:
+            return
+        try:
+            update_tiff(path, camera=camera)
+        except (OSError, ValueError, struct.error) as e:
+            self.say(f"could not write the camera into {Path(path).name} ({getattr(e, 'strerror', None) or e})")
 
     @staticmethod
     def _taken(text, n, now):
@@ -145,7 +157,7 @@ class ScanMixin:
         icc = s.nikon_profile(self._driver_film())
         job["icc"] = bytes(icc) if icc else None
         if clean and st["dust_method"] == "ice" and not self.check_ice():
-            self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using the built-in dust removal")
+            self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using IR Clean for dust removal")
         log = self._scan_log_open(outdir, len(indices))
         name_folders = self._name_folders()
         self.batch_day = time.strftime("%Y%m%d")
@@ -470,6 +482,7 @@ class ScanMixin:
             self._measure_colour(stem, finished, r)
             pos, pos_icc = self._positive(self._cropped(i, turned(finished)), icc, getattr(r, "exposures", None))
             write_tiff(pos_dir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": srgb_tag(pos_icc)})
+            self._stamp_camera(pos_dir / f"{stem}.tif")
             saved.append(f"Positive/{stem}.tif")
             self.say(f"saved Positive/{stem}.tif" + self._profile_words(r) + self._crop_words(i, pos))
             self._show_scan(i, finished, r, f"Positive/{stem}.tif", pos)
@@ -505,6 +518,7 @@ class ScanMixin:
         if not negative or st["negatives"] in ("positive", "both"):
             pos, pos_icc = self._positive(planes, icc, getattr(r, "exposures", None))
             write_tiff(outdir / f"{stem}.tif", pos, r.dpi, pos_icc, meta={**meta, "colorspace": srgb_tag(pos_icc)})
+            self._stamp_camera(outdir / f"{stem}.tif")
             saved.append(f"{stem}.tif")
             self.say(f"saved {stem}.tif ({st['colour_space'] if st['colour_space'] in COLOUR_SPACES else 'scanner RGB'}){note}"
                      + self._profile_words(r) + self._crop_words(i, pos, windowed))
@@ -725,7 +739,7 @@ class ScanMixin:
                 return self._ice_clean(planes, ir, dpi, who, film)
             except Exception as e:  # noqa: BLE001 - any trouble with the helper: carry on without it
                 reason = "it took too long" if type(e).__name__ == "TimeoutExpired" else str(e)
-                self.say(f"{who}: the Nikon ICE helper failed ({reason}); using the built-in dust removal")
+                self.say(f"{who}: the Nikon ICE helper failed ({reason}); using IR Clean for dust removal")
         started = time.time()
         try:
             result = dust_clean(planes, ir, dpi, negative=film in ("negative", "mono", "chromo"),

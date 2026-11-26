@@ -215,6 +215,20 @@ down) from the turns you make, and turns new frames the same way.
 
 [Back to the README](../README.md)
 
+## Camera, aperture and shutter speed
+
+- **Camera** belongs to the roll. Type it in the New roll window, or later in the **Camera** row under a
+  roll's description in Scanned pictures (Save camera). It is kept in the roll's `Library.json` and
+  written into the tags of the roll's finished pictures as Make and Model, the way a camera writes
+  them, so Lightroom shows it as the camera. The scanner's name, which those tags held, moves to the
+  file's XMP; the picture's details still list it, and it comes back if the camera is emptied.
+  New scans of the roll get the camera as they are saved. RAW files are never changed.
+- **ƒ/** (aperture) and **Shutter** are per picture, beside the picture under Photo taken. Type `5.6`
+  or `f/5.6`; `1/125`, or `125` as on the camera's dial, or `2s` for whole seconds. They go into the
+  file as FNumber and ExposureTime (EXIF and XMP). Empty a field to take it out again.
+- A file that cannot be written (a RAW-only frame, a file Lightroom has written into) keeps them in the
+  app's list only. Exports get all three either way, unless Metadata is "date and caption only" or "none".
+
 ## Photo taken, whole roll
 
 Under a roll's description: type a year (`1988`) or a day (`1988-02-06` or `6.2.1988`) and press

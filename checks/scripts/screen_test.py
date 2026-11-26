@@ -152,12 +152,12 @@ def scan_frame(frame, **kw):
     asked.append({k: kw.get(k) for k in ("infrared", "clean")}); return real(frame, **kw)
 app.session.scan_frame = scan_frame
 app.scan([0])
-check("Built in: the pass is taken with its infrared and cleaned in the app, not by the driver",
+check("IR Clean: the pass is taken with its infrared and cleaned in the app, not by the driver",
       asked[-1] == {"infrared": True, "clean": False} and any("dust removal rebuilt" in l and " in " in l for l in logged(app, "frame 1")), str(asked[-1]))
 check("...and no infrared file is saved when that is unticked", [p.name for p in only(out)] == [p.name for p in only(out) if "_IR" not in p.name])
 app.settings["dust_method"] = "pass"
 app.scan([1])
-check("Driver (older method): the driver cleans inside the pass", asked[-1] == {"infrared": True, "clean": True}, str(asked[-1]))
+check("nkscan: the driver cleans inside the pass", asked[-1] == {"infrared": True, "clean": True}, str(asked[-1]))
 app.settings.update(dust_method="builtin", clean=False)
 app.scan([2])
 check("dust removal off: no cleaning, no infrared asked for", asked[-1] == {"infrared": False, "clean": False}, str(asked[-1]))

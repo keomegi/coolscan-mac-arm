@@ -265,7 +265,11 @@ def read_tiff_info(path, thumb=False):
                 value = f.read(size)
             value = value[:size]
             if typ == 2:
-                return value.split(b"\0", 1)[0].decode("latin-1")
+                value = value.split(b"\0", 1)[0]
+                try:
+                    return value.decode("utf-8")
+                except UnicodeDecodeError:
+                    return value.decode("latin-1")
             if typ in (1, 7):
                 return value
             if typ == 5:
@@ -303,6 +307,9 @@ def read_tiff_info(path, thumb=False):
                 info["datetime"] = value(exif[36867])
             if 34855 in exif:
                 info["iso"] = value(exif[34855])[0]
+            for tag, key in ((33434, "exposure"), (33437, "fnumber")):   # as a camera writes them
+                if tag in exif and exif[tag][0] == 5:
+                    info[key] = value(exif[tag])
         stamp = info.pop("datetime", None)
         if stamp:
             try:

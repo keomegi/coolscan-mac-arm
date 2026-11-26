@@ -159,6 +159,7 @@ class RollsMixin:
         self._remember_roll()
         for k in ("film_brand", "film_stock", "film_iso", "film_notes"):
             st[k] = str(details.get(k, "")).strip()
+        st["film_camera"] = re.sub(r"\s+", " ", str(details.get("film_camera", ""))).strip()[:80]
         if st["film_profile"]:
             # the next roll may be another film, and another film's profile would colour it wrongly
             self.say(f'film profile "{st["film_profile"]}" is switched off for the new roll; '
@@ -178,11 +179,20 @@ class RollsMixin:
         self.save_settings()
         self.say(f"new roll: saving to {base / name}, numbering starts again")
         self._write_description()
+        if st["film_camera"]:   # kept with the roll (Library.json), where Scanned pictures and exports read it
+            try:
+                (base / name).mkdir(parents=True, exist_ok=True)
+                with self.lib_lock:
+                    marks = self._lib_marks(base / name)
+                    marks["camera"] = st["film_camera"]
+                    self._lib_save_marks(base / name, marks)
+            except OSError as e:
+                self.say(f"could not keep the camera with the roll ({getattr(e, 'strerror', None) or e})")
         with self.lock:
             self.version += 1
 
     # -- going back to an earlier roll
-    _FILM_KEYS = ("film_brand", "film_stock", "film_iso", "film_notes")
+    _FILM_KEYS = ("film_brand", "film_stock", "film_iso", "film_notes", "film_camera")
 
     def rolls(self):
         """Every roll folder in the target folder, lowest number first. The current roll is always in it."""
@@ -219,6 +229,9 @@ class RollsMixin:
         profile = str(known.get("film_profile", "") or "")
         st["film_profile"] = profile if profile in st["film_profiles"] else ""
         st["roll"], st["start"], st["film_description"] = name, 0, ""
+        camera = self._lib_marks(self._base() / name).get("camera")
+        if isinstance(camera, str):   # the roll's own list is what counts (it may have been set in Scanned pictures)
+            st["film_camera"] = camera
         self._sync_roll_colour()
         self.read_description()
         self.save_settings()

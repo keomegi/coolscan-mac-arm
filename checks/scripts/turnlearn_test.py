@@ -53,6 +53,26 @@ print("A learning which way up pictures go")
 train = [frame() for _ in range(30)]
 test = [frame() for _ in range(40)]
 rows = [(cl.small_luminance(p), k) for p, k in train]
+if not tl.gpu():
+    # Learning from turns is the picture network alone, and that needs MLX (an Apple Silicon Mac). Where
+    # there is none (GitHub's Linux runner), only this is checked: nothing is learned, nothing breaks.
+    print("   (no MLX here: the learning checks are skipped; checking that nothing is learned and nothing breaks)")
+    mn, nn_ = tl.train(rows)
+    mnp = tl.TurnModel(mn)
+    check("without MLX nothing is learned or turned", nn_ is None and mn["kind"] == "none" and not mn["use"] and not mn["auto"]
+          and not mnp.usable() and not mnp.may_turn() and int(np.argmax(mnp.probs(rows[0][0]))) == 0)
+    check("the words say why", "MLX" in tl.TurnLearner.describe(mn), tl.TurnLearner.describe(mn))
+    lr0 = tl.TurnLearner(tmp / "nomlx")
+    for i, (p, k) in enumerate(train):
+        lr0.add(f"t{i}", p, k)
+    res = lr0.learn(lr0.examples())
+    check("the app's learner still runs, keeps the pictures and gives a report", res.get("ok") and len(lr0.examples()) == 30
+          and lr0.report()["ok"] and (lr0.model() is None or not lr0.model().usable()), str(res.get("text")))
+    check("a frame gets no turn from it", lr0.guess(test[0][0]) is None)
+    check("Reset to default answers", "ok" in lr0.reset_to_shipped())
+    print()
+    print("FAILED: " + ", ".join(bad) if bad else "all passed (without MLX)")
+    sys.exit(1 if bad else 0)
 model, net = tl.train(rows)
 keep = np.mean([k == 0 for _, k in test])
 check("tried on pictures it had not seen, it has the right way up more often than leaving them as they are",

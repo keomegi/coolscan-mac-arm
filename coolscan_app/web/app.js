@@ -171,7 +171,7 @@ function setPicking(on) { picking = on; if (on) setCropping(false); document.bod
 $('b-fpoint').onclick = () => { if (S.settings.focus_point) { api('/api/settings', {focus_point: null}); return; } setPicking(!picking); render(true); };
 
 // ---------------------------------------------------------------- rolls
-const rollKeys = ['film_brand', 'film_stock', 'film_iso', 'film_notes', 'film_description'];
+const rollKeys = ['film_brand', 'film_stock', 'film_iso', 'film_notes', 'film_camera', 'film_description'];
 $('rolldesc').addEventListener('change', () => { descHold = Date.now() + 1500; api('/api/describe', {text: $('rolldesc').value}); });
 function rollnoDone() { $('rollnodlg').hidden = true; $('b-rollnoyes').hidden = true; }
 async function rollno(move) {
@@ -324,8 +324,6 @@ function drawQueuePlace(d, i) {
 $('tiles').addEventListener('click', ev => {
   const t = ev.target.closest('.tile'); if (!t || ev.target.closest('.tick')) return;   // the tick box has its own handler
   if (ev.target.closest('.fsbtn')) { look(+t.dataset.i); openFrameSets(); return; }
-  const v = ev.target.closest('.atbtn');
-  if (v) { api('/api/turnlearn', {action: v.dataset.a, frames: [+t.dataset.i]}); return; }
   const i = +t.dataset.i;
   if (ev.shiftKey && anchor !== null) { for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) sel.add(k); cur = i; render(true); }
   else if (ev.metaKey || ev.ctrlKey) { cur = i; tick(i, !sel.has(i)); }
@@ -574,8 +572,8 @@ function drawStripTurn() {
   $('row-rotate180').hidden = !S.settings.show_rotate180;
   bar.hidden = !st || !S.frames.length;
   if (bar.hidden) return;
-  $('stripturntext').textContent = '↻ Frame direction found: ' + (st.turned ? 'every frame turned 180°'
-    : 'frames not turned 180°') + ' (' + st.agree + ' of ' + st.frames + ' frames agree). Is this right?';
+  $('stripturntext').textContent = '↻ Frame direction found' + (st.flipped ? ', the other way round than before on this roll' : '')
+    + ' (' + st.agree + ' of ' + st.frames + ' frames agree). Do the frames below look correct?';
   $('b-stripok').disabled = $('b-stripno').disabled = !!S.job;
 }
 // a strip that looks like another film than the roll it is being scanned into
@@ -623,14 +621,10 @@ function drawTiles() {
       if (kind === 'scan' || kind === 'preview') { const b = document.createElement('span'); b.className = 'badge ' + kind; b.textContent = kind === 'scan' ? 'Scanned' : 'Preview'; pic.appendChild(b); }
       const mb = document.createElement('span'); mb.className = 'moved'; mb.hidden = true; mb.title = 'Moved along the strip by hand'; pic.appendChild(mb);
       const sk = document.createElement('span'); sk.className = 'skipped'; pic.appendChild(sk);
-      // a turn auto rotate made by itself: marked until the person keeps it or turns it back
+      // a turn auto rotate made by itself: marked, not asked about (wrong: turned back with the turn buttons)
       const at = document.createElement('div'); at.className = 'autoturn'; at.hidden = true;
       const atw = document.createElement('span'); atw.className = 'atwords'; atw.textContent = '↻ Auto rotated';
-      const ok = document.createElement('button'); ok.className = 'small atbtn ok'; ok.dataset.a = 'accept'; ok.tabIndex = -1;
-      ok.textContent = '✓ Accept'; ok.title = 'Keep this turn (auto rotate learns it guessed right)';
-      const no = document.createElement('button'); no.className = 'small atbtn no'; no.dataset.a = 'reject'; no.tabIndex = -1;
-      no.textContent = '✕ Reject'; no.title = 'Turn it back (auto rotate learns it guessed wrong)';
-      at.append(atw, ok, no); pic.appendChild(at);
+      at.append(atw); pic.appendChild(at);
       const nb = document.createElement('span'); nb.className = 'badge now'; nb.textContent = 'Scanning…'; nb.hidden = true; pic.appendChild(nb);
       box.appendChild(d);
     }
@@ -658,7 +652,7 @@ function drawTiles() {
     sk.hidden = !words.length || now === i; sk.textContent = words.join(' · ');
     const au = !!t2.turn_auto && !!t2.src, at = d.querySelector('.autoturn');
     d.classList.toggle('auto', au); at.hidden = !au || now === i;
-    if (au) at.title = 'Auto rotate turned this frame by itself' + (t2.turn_hint && t2.turn_hint.p ? ' (' + Math.round(t2.turn_hint.p * 100) + '% sure)' : '');
+    if (au) at.title = 'Auto rotate turned this frame by itself' + (t2.turn_hint && t2.turn_hint.p ? ' (' + Math.round(t2.turn_hint.p * 100) + '% sure)' : '') + '. Wrong? Turn it back with the turn buttons; it learns from that.';
     sk.title = words.length ? 'This preview was made with ' + ['af' in miss && 'no autofocus', 'ae' in miss && 'the exposure of the last preview, not metered'].filter(Boolean).join(' and ') + ' (Settings ⚙ › Preview scan)' : '';
   }
   $('noframes').hidden = n > 0;
@@ -727,12 +721,9 @@ function drawViewer(busy) {
   const th = t.turn_hint, vt = $('vturn');
   vt.hidden = !(th && cur !== null && (th.applied ? th.turn : th.quarter));
   if (!vt.hidden) {
-    $('vturntext').textContent = th.applied ? 'Auto rotate turned this frame ' + th.words + ' (' + Math.round(th.p * 100) + '% sure). Accept keeps it, Reject turns it back; it learns from either.'
+    $('vturntext').textContent = th.applied ? 'Auto rotate turned this frame ' + th.words + ' (' + Math.round(th.p * 100) + '% sure). Wrong? Turn it back with the turn buttons; it learns from that.'
       : 'Auto rotate thinks this frame goes ' + th.words + ' (' + Math.round(th.p * 100) + '% sure).' + (th.small ? ' A thumbnail is too small for it to turn by itself: it looks again at the scan, before the files are saved.' : '');
     $('b-turnhint').hidden = !!th.applied;
-    $('b-turnok').hidden = $('b-turnno').hidden = !(th.applied && t.turn_auto);
-    $('b-turnok').onclick = () => api('/api/turnlearn', {action: 'accept', frames: [cur]});
-    $('b-turnno').onclick = () => api('/api/turnlearn', {action: 'reject', frames: [cur]});
     $('b-turnhint').onclick = () => api('/api/rotate', {frames: [cur], quarter: th.quarter});
   }
   const sv = $('vsaved'), saved = t.saved || [];
@@ -780,10 +771,10 @@ function textOf(k, v) {
   for (const o of e.options) if (o.value === String(v)) return o.textContent;
   return String(v);
 }
-// dust removal in the same words everywhere: "on, built in" or "off"
+// dust removal in the same words everywhere: "on, IR Clean" or "off"
 function dustWords(clean, method, film) {
   if (film === 'mono') return 'off (B&W film)';
-  return clean ? 'on, ' + textOf('dust_method', method).replace(/ \(.*\)$/, '').toLowerCase() : 'off';
+  return clean ? 'on, ' + textOf('dust_method', method).replace(/ \(.*\)$/, '') : 'off';
 }
 function scanSettings(st) {
   const film = textOf('film', st.film), dust = st.clean && st.film !== 'mono' ? textOf('dust_method', st.dust_method) : '';
@@ -880,7 +871,7 @@ function drawFrameSets() {
   }
   for (const s of rows.querySelectorAll('select')) {
     const k = s.dataset.k, src = $('s-' + k);
-    const methods = [...$('s-dust_method').options].filter(o => !o.disabled).map(o => [o.value, 'On, ' + o.textContent.toLowerCase()]);
+    const methods = [...$('s-dust_method').options].filter(o => !o.disabled).map(o => [o.value, 'On, ' + o.textContent]);
     const vals = k === 'clean' ? [['off', 'Off'], ...methods] : [...src.options].map(o => [o.value, o.textContent]);
     const shared = k === 'clean' ? dustWords(st.clean, st.dust_method, st.film) : textOf(k, st[k]);
     const want = JSON.stringify([shared, vals]);
@@ -970,7 +961,7 @@ function render(force) {
     if (rp.dataset.v !== want) { rp.innerHTML = ''; for (const n of S.rolls) { const o = document.createElement('option'); o.value = n; o.textContent = n; rp.appendChild(o); } rp.dataset.v = want; }
     rp.value = st.roll || '';
   }
-  $('rollfilm').textContent = (S.film_text ? ('Film: ' + S.film_text) : 'No film details') + ' · saving in ' + (S.roll_path || '') + (st.archive ? ' (RAW/ and Positive/)' : '');
+  $('rollfilm').textContent = (S.film_text ? ('Film: ' + S.film_text) : 'No film details') + (st.film_camera ? ' · Camera: ' + st.film_camera : '') + ' · saving in ' + (S.roll_path || '') + (st.archive ? ' (RAW/ and Positive/)' : '');
   if (document.activeElement !== $('rollno') && $('rollnodlg').hidden) $('rollno').value = S.roll_number || '';
   const dsc = $('rolldesc'); if (document.activeElement !== dsc && Date.now() > descHold) dsc.value = st.film_description || '';
   document.body.classList.toggle('noroll', !st.use_roll);

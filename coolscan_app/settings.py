@@ -29,6 +29,7 @@ def default_settings():
         "show_frame_offset": False,  # Settings: the Strip offset control and the per-frame arrows are shown on the main screen
         "focus_mode": "frame", "focus_point": None, "focus_position": 0,
         "exposure_mode": "auto", "white_balance": "film", "rotate180": False,
+        "strip_turn_rolls": {},   # roll -> every frame turned 180° or not, as the person confirmed it (asked once a roll)
         "invert_preview": True, "negatives": "positive", "outdir": str(Path.home() / "Pictures" / "Coolscan"),
         "basename": "", "digits": 3, "start": 0, "photo_date": "",
         "archive": True,          # Archive mode: RAW/ + Positive/ from one pass
@@ -44,7 +45,7 @@ def default_settings():
         "log_days": 30,  # the app log and driver notes in logs/ older than this are deleted; 0 = keep them all
         "roll": "", "use_roll": True,  # False: save straight into the folder, no roll folder or _R part
         "overwrite": False,  # a typed Next number may overwrite pictures already there (the page asks first)
-        "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "",
+        "name_date": True, "film_brand": "", "film_stock": "", "film_iso": "", "film_notes": "", "film_camera": "",
         "film_description": "",
         "rolls": {},   # roll folder name -> its film details, so going back to a roll brings them back
         "presets": {},  # name -> the scan settings saved under that name

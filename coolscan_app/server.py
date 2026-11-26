@@ -183,6 +183,8 @@ def make_handler(app):
                 try:
                     if path == "/api/library/describe":
                         return self._send(app.library_describe(key, body.get("text", "")))
+                    if path == "/api/library/camera":
+                        return self._send(app.library_camera(key, body.get("camera", "")))
                     if path == "/api/library/film_colour":
                         return self._send(app.library_film_colour(key, body.get("mode"), body.get("name") or ""))
                     if path == "/api/library/film_base":
@@ -402,7 +404,7 @@ def make_handler(app):
                         app.say("Kodachrome: dust removal switched off (its cyan dye blocks infrared like dust); "
                                 "tick it again to try it")
                 for k, v in body.items():
-                    if k in ("roll", "film_description", "rolls", "presets", "film_profile", "film_profiles", "test_runs", "ir"):
+                    if k in ("roll", "film_description", "film_camera", "rolls", "presets", "film_profile", "film_profiles", "test_runs", "ir", "strip_turn_rolls"):
                         continue  # these have their own buttons, which also look after the folder
                     if k in app.settings:
                         old = app.settings[k]
@@ -427,6 +429,7 @@ def make_handler(app):
                     app.auto_crop_setting_changed()
                 if "rotate180" in body and not app.job:   # turned by hand: the strip's guess is set aside
                     app.strip_turn = None
+                    app.strip_roll_keep()
                     app.turnlearn_strip_flipped()
                 if ("rotate180" in body or "invert_preview" in body or "tone" in body or "restore" in body
                         or "film" in body) and not app.job:

@@ -37,6 +37,7 @@ PAGES = {
     "page_queue_buttons.js": ((), {}, None),
     "page_roll_optional.js": ((), {}, None),
     "page_export.js": ((), {}, None),
+    "page_camera.js": ((), {}, None),
     "page_auto_crop.js": ((), {"COOLSCAN_DEMO_BORDERS": "1"}, None),
     # already failing before the folders were moved (waits for 4 results that do not come); left to fix in test mode
     "page_test_mode.js": (("--test",), {}, [needs_testmode, pytest.mark.xfail(reason="failed before the move too", strict=False)]),
@@ -74,7 +75,7 @@ def test_page(name, app_copy, home, tmp_path):
     shots.mkdir()
     with running_app(app_copy, home, *args, env_extra=env) as (base, _):
         port = base.rsplit(":", 1)[1]
-        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name in ("page_test.js", "page_export.js")
+        argv = ([str(home / "Pictures" / "Coolscan"), str(shots), port] if name in ("page_test.js", "page_export.js", "page_camera.js")
                 else [port, str(shots)])
         r = subprocess.run(["node", str(PAGE / name), *argv], cwd=PAGE, capture_output=True, text=True, timeout=600)
     out = r.stdout + r.stderr
