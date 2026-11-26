@@ -136,6 +136,12 @@ class SettingsMixin:
         for k, v in saved.items():
             if k in self.settings and type(v) is type(self.settings[k]):
                 self.settings[k] = v
+        # the Nikon ICE helper is no longer a choice: what pointed to it uses IR Clean
+        if self.settings["dust_method"] not in ("builtin", "pass"):
+            self.settings["dust_method"] = "builtin"
+        for values in self.settings["presets"].values():
+            if isinstance(values, dict) and values.get("dust_method") not in (None, "builtin", "pass"):
+                values["dust_method"] = "builtin"
         if not isinstance(saved.get("defaults_version"), int) or saved["defaults_version"] < 2:
             # settings saved before ProPhoto RGB and the flat tone became the defaults:
             # move them over once. Whatever is picked after that is kept.

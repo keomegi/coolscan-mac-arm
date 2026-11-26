@@ -2,7 +2,6 @@
 
 import re
 import struct
-import subprocess
 import time
 import traceback
 import types
@@ -14,22 +13,9 @@ from ..imaging.colour import COLOUR_SPACES, NIKON_MODEL_NAMES, convert_planes, f
 from .driver import Cancelled, _lost_scanner, _stopped, _this_frame_only, clock, explain
 from ..imaging.dust import dust_clean
 from ..imaging.enhance import merge_exposures, pass_shift, reduce_grain, restore_colour
-from ..imaging.files import read_tiff_rgb16, write_tiff
+from ..imaging.files import write_tiff
 from ..imaging.tiffmeta import update_tiff
 
-
-#
-# If a program called ice_clean sits next to coolscan.py, it can be chosen for dust
-# removal instead of the built-in method. The app hands it the scan as a 16-bit
-# TIFF with four channels (red, green, blue, infrared; as scanned, not inverted,
-# not rotated) and reads back a 16-bit RGB TIFF of the same size:
-#
-#   ice_clean INPUT.tif OUTPUT.tif --film negative --dpi 2900 --model "LS-40 ED"
-#
-# Exit code 0 means OUTPUT.tif is good. Anything else: the built-in method is used.
-
-ICE_HELPER = Path(__file__).resolve().parents[2] / "ice_clean"
-ICE_TIMEOUT = 600  # seconds per frame
 
 
 class ScanMixin:
@@ -156,8 +142,6 @@ class ScanMixin:
                    raw_dir=raw_dir, pos_dir=pos_dir, outdir=outdir)
         icc = s.nikon_profile(self._driver_film())
         job["icc"] = bytes(icc) if icc else None
-        if clean and st["dust_method"] == "ice" and not self.check_ice():
-            self.say("the Nikon ICE helper is not ready (run nikon_ice/setup_mac.sh); using IR Clean for dust removal")
         log = self._scan_log_open(outdir, len(indices))
         name_folders = self._name_folders()
         self.batch_day = time.strftime("%Y%m%d")
@@ -378,12 +362,11 @@ class ScanMixin:
         return add
 
     def _dust_method(self):
-        """How dust is removed: "builtin" (the app's own cleaner, on the scan in memory), "ice" (the
-        helper) or "pass" (nkscan's cleaner, the older method)."""
+        """How dust is removed: "builtin" (IR Clean, the app's own cleaner, on the scan in
+        memory) or "pass" (nkscan's cleaner, the older method). Anything else that was saved
+        (such as the Nikon ICE helper, which the app no longer has) counts as IR Clean."""
         method = self.settings["dust_method"]
-        if method not in ("builtin", "ice", "pass") or (method == "ice" and not self.ice_ready):
-            method = "builtin"
-        return method
+        return method if method in ("builtin", "pass") else "builtin"
 
     def _scan_one(self, s, d, i, n, stem, job, saved):
         """Scan frame i and write its files. Each file written is added to `saved`."""
@@ -721,8 +704,7 @@ class ScanMixin:
         """Dust and scratch removal on a finished pass, as scanned. Returns the cleaned planes.
 
         The built-in cleaner (dust.py) runs here on the scan in memory, so the
-        untouched scan can be kept as well. The Nikon ICE helper is used instead
-        when it is there and chosen. `film` and `who` (words for the log) are for re-developing.
+        untouched scan can be kept as well. `film` and `who` (words for the log) are for re-developing.
         """
         film = film or self._film()
         who = who or f"frame {i + 1}"
@@ -734,12 +716,6 @@ class ScanMixin:
         if ir is None or len(planes) != 3:
             self.say(f"{who}: dust removal needs red, green, blue and infrared; left as scanned")
             return planes
-        if (method or self._dust_method()) == "ice" and self.ice_ready:
-            try:
-                return self._ice_clean(planes, ir, dpi, who, film)
-            except Exception as e:  # noqa: BLE001 - any trouble with the helper: carry on without it
-                reason = "it took too long" if type(e).__name__ == "TimeoutExpired" else str(e)
-                self.say(f"{who}: the Nikon ICE helper failed ({reason}); using IR Clean for dust removal")
         started = time.time()
         try:
             result = dust_clean(planes, ir, dpi, negative=film in ("negative", "mono", "chromo"),
@@ -757,27 +733,6 @@ class ScanMixin:
         cleaned, count = result
         self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
         self.say(f"{who}: dust removal rebuilt {count} pixels in {time.time() - started:.0f} s")
-        return cleaned
-
-    def _ice_clean(self, planes, ir, dpi, who, film):
-        import tempfile
-        self.say(f"{who}: dust removal by the Nikon ICE helper")
-        started = time.time()
-        with tempfile.TemporaryDirectory(prefix="coolscan-ice-") as tmp:
-            src, dst = Path(tmp) / "input.tif", Path(tmp) / "output.tif"
-            write_tiff(src, list(planes) + [ir], dpi)
-            product = (getattr(self.caps, "product", None) or "").strip()
-            run = subprocess.run(self._ice_cmd() + [str(src), str(dst), "--film", film,
-                                  "--dpi", str(int(dpi)), "--model", product],
-                                 capture_output=True, text=True, timeout=ICE_TIMEOUT)
-            if run.returncode != 0:
-                lines = (run.stderr or run.stdout or "").strip().splitlines()
-                raise RuntimeError(lines[-1][:200] if lines else f"exit code {run.returncode}")
-            cleaned = read_tiff_rgb16(dst)
-        if cleaned[0].shape != planes[0].shape:
-            raise RuntimeError("its picture has a different size")
-        self.frame_times["clean"] = self.frame_times.get("clean", 0.0) + time.time() - started
-        self.say(f"{who}: Nikon ICE finished in {time.time() - started:.0f} s")
         return cleaned
 
     def second_pass(self, s, i, frame, raw_result, base, opts, as_scanned):

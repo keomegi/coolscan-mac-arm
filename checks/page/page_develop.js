@@ -20,7 +20,7 @@ const { chromium } = require('playwright');
     runDisabled: await p.$eval('#b-run', e => e.disabled), runText: await txt('b-run'), tableHidden: await p.$eval('#filetable', e => e.hidden),
     nolook: await p.$eval('#nolook', e => !e.hidden), spaces: await p.$$eval('#h-colour_space option', o => o.map(x => x.textContent)),
     profiles: await p.$$eval('#h-film_profile option', o => o.map(x => x.textContent)),
-    iceDisabled: await p.$eval('#h-dust_method option[value=ice]', o => o.disabled) };
+    dustMethods: await p.$$eval('#h-dust_method option', o => o.map(x => x.value)) };
   await p.screenshot({ path: shots + '/develop-empty.png' });
 
   // 1. the files of the roll

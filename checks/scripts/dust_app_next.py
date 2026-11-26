@@ -43,36 +43,9 @@ def counting2(frame, **kw):
 app.session.scan_frame = counting2
 app.scan([0]); print("   passes:", calls["n"])
 
-print("3 ICE helper")
-helper = cs.ICE_HELPER
-print("   helper path:", helper, "| offered:", app.state()["ice_helper"])
-helper.write_text(f"""#!{sys.executable}
-import sys, numpy as np, tifffile
-if sys.argv[1:] == ['--status']: sys.exit(0)
-a = tifffile.imread(sys.argv[1]); assert a.shape[2] == 4 and a.dtype == np.uint16, a.shape
-print('args', sys.argv[3:], file=sys.stderr)
-rgb = a[..., :3].copy(); rgb[a[..., 3] < 20000] = 12345      # mark what it "cleaned"
-tifffile.imwrite(sys.argv[2], rgb, photometric='rgb')
-""")
-helper.chmod(0o755)
-try:
-    app, out = fresh(archive=True, dust_method="ice"); app.check_ice()
-    print("   offered now:", app.state()["ice_helper"], "| method:", app._dust_method())
-    app.scan([0])
-    roll = next(out.glob("Roll*"))
-    raw = tifffile.imread(str(roll / "RAW/Scan_001_R001.tif"))
-    print("   RAW still has dust (untouched):", bool((raw[..., 3] < 20000).any()), "|", [l[9:] for l in app.log if "ICE" in l])
-    app, out = fresh(dust_method="ice")          # not archive
-    app.scan([0]); print("   not archive:", [l[9:] for l in app.log if "ICE" in l or "saved" in l])
-    helper.write_text("#!/bin/sh\n[ \"$1\" = --status ] && exit 0\necho 'wine: cannot find ICEDLL.dll' >&2\nexit 3\n")
-    app, out = fresh(archive=True, dust_method="ice"); app.scan([0])
-    print("   helper fails:", [l[9:] for l in app.log if "ICE" in l or "rebuilt" in l])
-    helper.write_text("#!/bin/sh\n[ \"$1\" = --status ] && exit 0\nsleep 5\n"); cs.ICE_TIMEOUT = 1
-    app, out = fresh(archive=True, dust_method="ice"); app.scan([0])
-    print("   helper hangs:", [l[9:] for l in app.log if "ICE" in l or "rebuilt" in l])
-finally:
-    helper.unlink()
-app, out = fresh(dust_method="ice"); print("   helper gone -> method:", app._dust_method())
+print("3 a setting left on the Nikon ICE helper (no longer in the app)")
+app, out = fresh(archive=True, dust_method="ice"); app.scan([0])
+print("   method:", app._dust_method(), "|", [l[9:] for l in app.log if "rebuilt" in l or "ICE" in l])
 
 print("4 read_tiff_rgb16 on big-endian and planar files")
 rgb = (np.random.default_rng(0).integers(0, 65535, (40, 50, 3))).astype(np.uint16)

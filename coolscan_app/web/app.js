@@ -934,7 +934,6 @@ function render(force) {
   }
   $('negrow').hidden = !!st.archive; $('cropscanrow').hidden = !!st.archive; $('dustrow').hidden = !st.clean || st.film === 'mono';
   $('cleanrow').hidden = st.film === 'mono'; $('monohint').hidden = st.film !== 'mono'; $('kchint').hidden = st.film !== 'kodachrome';
-  const iceopt = $('s-dust_method').querySelector('option[value=ice]'); iceopt.hidden = iceopt.disabled = !S.ice_helper;
 
   for (const id of ['b-load', 'b-eject', 'b-thumb', 'b-preview', 'b-cal', 'b-af', 'b-ae', 'b-unlock', 'b-scan', 'b-connect', 'b-newroll', 'b-rollok',
     'b-rollno', 'b-rollnoyes', 'rollpick', 'preset', 'b-presetdelyes']) $(id).disabled = busy;

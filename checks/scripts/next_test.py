@@ -205,32 +205,20 @@ app.notify("hello", wait=True)
 check("no osascript (not a Mac): said plainly, no crash", bool(logged(app, "needs a Mac")), "; ".join(logged(app, "could not")))
 os.environ["PATH"] = old_path
 
-print("C Nikon ICE helper readiness")
-helper = cs.ICE_HELPER
-assert not helper.exists(), helper
-try:
-    app = cs.App(demo=True)
-    check("no helper file: not offered", app.check_ice() is False and app.state()["ice_helper"] is False)
-    helper.write_text("#!/bin/sh\necho '{\"ready\": false, \"missing\": [\"wine\"]}'\nexit 3\n"); helper.chmod(0o644)
-    check("helper there but says not ready (exit 3): not offered", app.check_ice() is False and app.state()["ice_helper"] is False)
-    app.settings["dust_method"] = "ice"
-    check("...and a saved choice of ICE falls back to the built-in method", app._dust_method() == "builtin")
-    helper.write_text("#!/bin/sh\nsleep 60\n"); helper.chmod(0o755)
-    real_run = cs.subprocess.run
-    cs.subprocess.run = lambda *a, **kw: real_run(*a, **{**kw, "timeout": 1})
-    check("helper hangs: not offered", app.check_ice() is False)
-    cs.subprocess.run = real_run
-    real_helper = pathlib.Path("/mnt/project-files/ice-harness/mac/ice_clean")
-    helper.write_bytes(real_helper.read_bytes()); helper.chmod(0o644)   # as copied: no "may be run" mark
-    run = real_run(app._ice_cmd() + ["--status"], capture_output=True, text=True, timeout=30)
-    check("the real ice_clean, without Wine: runs through Python, says not ready, not offered",
-          run.returncode != 0 and app.check_ice() is False, f"exit {run.returncode}: {run.stdout.strip()[:120]}")
-    helper.write_text("#!/bin/sh\n[ \"$1\" = --status ] && exit 0\nexit 3\n"); helper.chmod(0o755)
-    check("helper says ready (exit 0): offered", app.check_ice() is True and app.state()["ice_helper"] is True
-          and app._dust_method() == "ice")
-finally:
-    if helper.exists():
-        helper.unlink()
+print("C the Nikon ICE helper is gone: what was saved for it uses IR Clean")
+app = cs.App(demo=True)
+check("the app no longer says anything about a helper", "ice_helper" not in app.state() and not hasattr(app, "check_ice"))
+app.settings["dust_method"] = "ice"
+check("a setting left on the helper cleans with IR Clean", app._dust_method() == "builtin")
+old_file = cs.SETTINGS_FILE
+cs.SETTINGS_FILE = tmp / "settings-with-ice.json"
+cs.SETTINGS_FILE.write_text(json.dumps({"dust_method": "ice", "defaults_version": 99,
+                                        "presets": {"old": {"dust_method": "ice", "dpi": 2900}, "new": {"dust_method": "pass"}}}))
+app = cs.App(demo=True); app.load_settings()
+check("saved settings that pointed to the helper open as IR Clean", app.settings["dust_method"] == "builtin"
+      and app.settings["presets"]["old"]["dust_method"] == "builtin" and app.settings["presets"]["new"]["dust_method"] == "pass",
+      str(app.settings["dust_method"]) + " " + str(app.settings["presets"]))
+cs.SETTINGS_FILE = old_file
 
 print("D roll number")
 def tree(base):

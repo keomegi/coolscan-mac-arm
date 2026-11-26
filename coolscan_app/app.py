@@ -3,7 +3,6 @@
 import bisect
 import math
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -32,7 +31,7 @@ except ImportError:
     notifier = None
 from .framesettings import FrameSettingsMixin
 from .rolls import RollsMixin
-from .scanner.scanning import ICE_HELPER, ScanMixin
+from .scanner.scanning import ScanMixin
 from .settings import SettingsMixin, default_settings
 try:  # test mode is optional too: testmode.py and web/test.html, test.js are kept out of git
     from .extras.testmode import TestMixin
@@ -113,8 +112,6 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         self.session_lock = threading.Lock()
         self.film_in = None         # what the scanner last said: film in (True), out (False), not asked (None)
         self.film_armed = True      # the next time film is seen in, show its thumbnail
-        self.ice_ready = False      # the Nikon ICE helper is there and says it can run
-        self.ice_checked = 0.0
         self.session = None
         self.caps = None            # a copy of the capabilities, refreshed on the worker thread
         self.discovery = None
@@ -309,7 +306,7 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
             "sample_name": self._stem(None, number) + ".tif", "next_number": number,
             "film_in": self.film_in if self.settings["auto_thumbnail"] else None,
             "logs": self.log_summary(),
-            "ice_helper": self.ice_ready, "strip": self.strip_id, "notify": notifier is not None,
+            "strip": self.strip_id, "notify": notifier is not None,
             "rolls": self.rolls(), "timing": dict(self.timing, now=time.time()),
             "test": self.test_state() if self.test_mode else None,
             "develop": self.develop_state(),
@@ -372,24 +369,6 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         self._forget_pictures()
         self.say("the next button you press (or Connect) connects to the scanner again")
 
-    def _ice_cmd(self):
-        # a copied file can lose its "may be run" mark; a Python helper still runs through Python
-        return [str(ICE_HELPER)] if os.access(ICE_HELPER, os.X_OK) else [sys.executable, str(ICE_HELPER)]
-
-    def check_ice(self):
-        """Ask the Nikon ICE helper whether it can run (it needs Wine and Nikon's own library)."""
-        ready = False
-        if ICE_HELPER.exists():
-            try:
-                ready = subprocess.run(self._ice_cmd() + ["--status"], capture_output=True, timeout=30).returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                ready = False
-        self.ice_checked = time.time()
-        if ready != self.ice_ready:
-            self.ice_ready = ready
-            with self.lock:
-                self.version += 1
-        return ready
 
     def notify(self, text, plain=None, wait=False):
         """Tell the person, in every way they switched on. `plain` (no film notes) is what leaves the Mac for ntfy."""
@@ -430,9 +409,6 @@ class App(SettingsMixin, FrameSettingsMixin, RollsMixin, ScanMixin, TestMixin, D
         while True:
             time.sleep(WATCH_SECONDS)
             try:
-                if time.time() - self.ice_checked > 60:
-                    self.ice_checked = time.time()
-                    threading.Thread(target=self.check_ice, daemon=True).start()
                 self._check_stall()
                 self.applog.daily()
                 self._after_sleep()

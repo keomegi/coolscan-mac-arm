@@ -499,7 +499,6 @@ def main():
         # Coolscan.app reads this line to know where the page is.
         print(f"COOLSCAN_URL {url}", flush=True)
     app.run_job("connect", app.connect)
-    threading.Thread(target=app.check_ice, daemon=True).start()
     threading.Thread(target=app.watch, daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, (url,)).start()

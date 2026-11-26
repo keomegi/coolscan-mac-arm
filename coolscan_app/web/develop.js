@@ -77,7 +77,7 @@ function drawFiles() {
 // ---------------------------------------------------------------- 2. how
 function fillForm() {
   const D = dev(), profs = (S.film_profiles || []).map(p => p.name);
-  const want = profs.join('\n') + '|' + S.rolls.join('\n') + '|' + D.ice_helper;
+  const want = profs.join('\n') + '|' + S.rolls.join('\n');
   if (want !== filled) {
     filled = want;
     const fp = $('h-film_profile'); fp.innerHTML = ''; opt(fp, '', 'Each frame on its own');
@@ -86,7 +86,6 @@ function fillForm() {
     const roll = $('roll'), keep = roll.value || S.settings.roll; roll.innerHTML = '';
     for (const r of S.rolls) opt(roll, r, r);
     roll.value = S.rolls.includes(keep) ? keep : (S.rolls[S.rolls.length - 1] || '');
-    $('h-dust_method').querySelector('option[value=ice]').disabled = !D.ice_helper;
   }
   for (const k of ['film', 'film_profile', 'tone', 'colour_space', 'restore', 'grain', 'dust_method']) {
     const e = $('h-' + k); if (document.activeElement !== e) e.value = String(D.how[k]);

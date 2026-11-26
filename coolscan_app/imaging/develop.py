@@ -75,7 +75,7 @@ class DevelopMixin:
             "how": {"film": "", "tone": self.settings["tone"], "film_profile": self.settings["film_profile"],
                     "colour_space": self.settings["colour_space"], "restore": int(self.settings["restore"]),
                     "grain": int(self.settings["grain"]), "clean": True,
-                    "dust_method": "ice" if self.settings["dust_method"] == "ice" else "builtin"},
+                    "dust_method": "builtin"},
             "view": "final",
             "piece": [0.5, 0.5],
             "stale": False,       # the pictures on show do not match the settings yet
@@ -97,7 +97,7 @@ class DevelopMixin:
                 # the versions ready to show: only once they are of the file on show and up to date
                 "have": sorted(self.dev_cache.get("pictures", {}))
                 if self.dev_cache.get("name") == d["current"] and not d["stale"] else [],
-                "ice_helper": self.ice_ready}
+}
 
     def _dev_bump(self):
         with self.lock:
@@ -206,7 +206,7 @@ class DevelopMixin:
                     how[k] = int(v)
                 elif k == "clean":
                     how[k] = bool(v)
-                elif k == "dust_method" and v in ("builtin", "ice"):
+                elif k == "dust_method" and v == "builtin":
                     how[k] = v
             if how != d["how"]:
                 d["how"], again = how, True
@@ -418,8 +418,7 @@ class DevelopMixin:
         if film == "negative":
             parts.append(f'film profile "{how["film_profile"]}"' if how["film_profile"] else "colour of each frame on its own")
         parts.append("no dust removal (not possible on B&W film)" if film == "mono" else
-                     ("dust removal by the Nikon ICE helper" if how["dust_method"] == "ice" and self.ice_ready
-                      else "dust removal by IR Clean") if how["clean"] else "no dust removal")
+                     "dust removal by IR Clean" if how["clean"] else "no dust removal")
         if how["restore"]:
             parts.append(f"colour restoration {how['restore']}")
         if how["grain"]:

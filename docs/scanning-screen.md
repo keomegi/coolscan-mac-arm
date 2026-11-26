@@ -207,8 +207,6 @@ buttons says what is set now.
     four pixels in ten, brightens clean film a little and adds grain of its own. Kept so you
     can compare, or go on with a roll you started with it. In Archive mode it needs a second
     pass.
-  - *Nikon ICE (helper)* only shows when a working `ice_clean` helper sits next to
-    `coolscan.py`; on this Mac it does not, so the choice is hidden.
 
   Nikon's ICE was only used as something to compare against. No Nikon code is in the app.
 - **Grain reduction** (off by default, levels 1 to 4): smooths film grain and keeps edges and

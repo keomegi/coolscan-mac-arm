@@ -12,8 +12,7 @@ the top of the ordinary screen, or go to http://127.0.0.1:8765/develop.
    listed with the film it was scanned as, its size, and a note when it has no infrared (so no
    dust removal) or no kept exposures (so film profiles cannot be used on it).
 2. **How to develop**: film, colour of negatives (each frame on its own, or a film profile), tone,
-   colour space, restore faded colours, grain reduction, and dust removal on or off (IR Clean, or
-   the Nikon ICE helper when it is set up). These are used for the pictures below and for every
+   colour space, restore faded colours, grain reduction, and dust removal on or off (by IR Clean). These are used for the pictures below and for every
    file you develop. nkscan's dust method is not here: it works by scanning the film
    again, which re-developing does not do.
 3. **Look**: one file shown four ways, to compare — **As scanned**, **Dust removed**, **Film
@@ -43,6 +42,6 @@ What to know:
 - A file scanned before the app wrote the film type into RAW files is developed as the film set on
   the scanning screen, and the page says so; pick the film on the page if it is wrong.
 - The second-pass dust method (nkscan's) cannot be used here: it needs the scanner. IR Clean
-  and Nikon ICE both work on the file's infrared and so are fine.
+  works on the file's infrared and so is fine.
 
 [Back to the README](../README.md)
